@@ -22,6 +22,7 @@ cd backend
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | id | INTEGER | PRIMARY KEY, INDEX | 聊天记录 ID |
+| user_id | INTEGER | INDEX | 所属用户 ID |
 | user_message | TEXT | NOT NULL | 用户输入内容 |
 | ai_response | TEXT | NOT NULL | AI 回复内容 |
 | created_at | DATETIME | INDEX | 创建时间，UTC |
@@ -38,6 +39,7 @@ cd backend
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | id | INTEGER | PRIMARY KEY, INDEX | 图片记录 ID |
+| user_id | INTEGER | INDEX | 所属用户 ID |
 | prompt | TEXT | NOT NULL | 用户输入的图片 Prompt |
 | style | VARCHAR(40) | NOT NULL | 图片风格，如写实、动漫、3D、油画、产品图、摄影 |
 | size | VARCHAR(40) | NOT NULL | 图片尺寸，如 1024x1024、1536x864、864x1536 |
@@ -50,7 +52,43 @@ cd backend
 - 开发阶段直接保存 base64
 - 生产建议改为对象存储 URL，例如 S3、R2、OSS
 
-## 3. app_settings
+## 3. chat_sessions
+
+聊天会话表。用于支持聊天页右侧“最近会话”和继续原对话。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 会话 ID |
+| user_id | INTEGER | INDEX | 所属用户 ID |
+| title | VARCHAR(160) | NOT NULL | 会话标题，默认取第一条用户消息前 42 个字符 |
+| created_at | DATETIME | INDEX | 创建时间，UTC |
+| updated_at | DATETIME | INDEX | 最近更新时间，UTC |
+
+用途：
+
+- 聊天页面右侧显示最近 10 条会话
+- 点击会话后恢复历史消息并继续对话
+- 后续接入登录后可增加 `user_id`
+
+## 4. chat_messages
+
+聊天消息表。保存每个会话中的用户消息和 AI 回复。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 消息 ID |
+| session_id | INTEGER | FOREIGN KEY, INDEX | 所属会话 ID，关联 `chat_sessions.id` |
+| role | VARCHAR(20) | NOT NULL | 消息角色，当前为 `user` 或 `assistant` |
+| content | TEXT | NOT NULL | 消息内容 |
+| created_at | DATETIME | INDEX | 创建时间，UTC |
+
+用途：
+
+- 恢复会话消息
+- 继续原对话时提供最近上下文给模型
+- 后续可扩展消息删除、收藏、token 统计
+
+## 5. app_settings
 
 应用配置表。用于后端管理控制台保存 OpenAI 兼容 API 配置。
 
@@ -76,15 +114,17 @@ cd backend
 - 当前为开发阶段明文存储
 - 生产环境建议加密存储，并限制后台访问权限
 
-## 4. user_accounts
+## 6. user_accounts
 
 用户管理表。用于后端管理界面的用户记录管理。
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | id | INTEGER | PRIMARY KEY, INDEX | 用户 ID |
+| username | VARCHAR(80) | UNIQUE, NOT NULL, INDEX | 登录用户名，不允许重复 |
 | name | VARCHAR(120) | NOT NULL | 用户名称 |
 | email | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | 用户邮箱 |
+| password_hash | TEXT | NOT NULL | PBKDF2-SHA256 密码哈希 |
 | role | VARCHAR(40) | NOT NULL, 默认 member | 用户角色 |
 | is_active | BOOLEAN | NOT NULL, 默认 true | 用户是否启用 |
 | created_at | DATETIME | INDEX | 创建时间，UTC |
@@ -108,7 +148,9 @@ cd backend
 
 ```text
 app_settings
+chat_messages
 chat_records
+chat_sessions
 image_records
 user_accounts
 ```

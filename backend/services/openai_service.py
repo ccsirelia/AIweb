@@ -19,17 +19,19 @@ class OpenAIService:
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.text_model, self.image_model = get_openai_model_config()
 
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, history: list[dict[str, str]] | None = None) -> str:
         try:
+            input_messages = [
+                {
+                    "role": "system",
+                    "content": "你是一个专业、清晰、可靠的 AI 创作助手。回答要有结构、准确，并保持简洁。",
+                }
+            ]
+            input_messages.extend(history or [])
+            input_messages.append({"role": "user", "content": message})
             response = self.client.responses.create(
                 model=self.text_model,
-                input=[
-                    {
-                        "role": "system",
-                        "content": "你是一个专业、清晰、可靠的 AI 创作助手。回答要有结构、准确，并保持简洁。",
-                    },
-                    {"role": "user", "content": message},
-                ],
+                input=input_messages,
             )
             text = getattr(response, "output_text", None)
             if not text:

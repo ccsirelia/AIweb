@@ -1,25 +1,142 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Copy, Loader2, RefreshCcw, SendHorizontal } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Clock3, Copy, Loader2, MessageSquareText, Plus, RefreshCcw, SendHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
-import { sendChat } from "@/lib/api";
+import { createChatJob, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 type Message = {
   role: "user" | "assistant";
   content: string;
 };
 
+const ACTIVE_SESSION_KEY = "aiweb_active_chat_session_id";
+const PENDING_JOBS_KEY = "aiweb_pending_chat_jobs";
+
+function readPendingJobs(): ChatJob[] {
+  if (typeof window === "undefined") return [];
+  const raw = localStorage.getItem(PENDING_JOBS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as ChatJob[];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingJobs(jobs: ChatJob[]) {
+  localStorage.setItem(PENDING_JOBS_KEY, JSON.stringify(jobs));
+}
+
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [pendingJobs, setPendingJobs] = useState<ChatJob[]>([]);
+  const router = useRouter();
   const lastUserMessage = useMemo(() => [...messages].reverse().find((item) => item.role === "user")?.content, [messages]);
+
+  useEffect(() => {
+    if (!getAuthToken()) {
+      router.push("/login");
+      return;
+    }
+    const storedSessionId = Number(localStorage.getItem(ACTIVE_SESSION_KEY) || "");
+    const storedJobs = readPendingJobs();
+    setPendingJobs(storedJobs);
+    refreshSessions();
+    if (storedSessionId) {
+      openSession(storedSessionId);
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (pendingJobs.length === 0) return;
+    const timer = window.setInterval(() => {
+      pollPendingJobs();
+    }, 1800);
+    pollPendingJobs();
+    return () => window.clearInterval(timer);
+  }, [pendingJobs.length, activeSessionId]);
+
+  async function pollPendingJobs() {
+    const jobs = readPendingJobs();
+    if (jobs.length === 0) {
+      setPendingJobs([]);
+      setLoading(false);
+      return;
+    }
+
+    const nextJobs: ChatJob[] = [];
+    let shouldReloadActiveSession = false;
+    for (const job of jobs) {
+      try {
+        const latest = await getChatJob(job.id);
+        if (latest.status === "completed") {
+          shouldReloadActiveSession = shouldReloadActiveSession || latest.session_id === activeSessionId;
+        } else if (latest.status === "failed") {
+          toast.error(latest.error || "AI 回复失败。");
+          shouldReloadActiveSession = shouldReloadActiveSession || latest.session_id === activeSessionId;
+        } else {
+          nextJobs.push(latest);
+        }
+      } catch (error) {
+        nextJobs.push(job);
+      }
+    }
+    writePendingJobs(nextJobs);
+    setPendingJobs(nextJobs);
+    setLoading(nextJobs.some((job) => job.session_id === activeSessionId));
+    if (shouldReloadActiveSession && activeSessionId) {
+      await openSession(activeSessionId, false);
+      await refreshSessions();
+    }
+  }
+
+  async function refreshSessions() {
+    setSessionsLoading(true);
+    try {
+      setSessions(await getChatSessions());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "会话历史加载失败。");
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function openSession(sessionId: number, showLoading = true) {
+    if (showLoading) setLoading(true);
+    try {
+      const detail = await getChatSession(sessionId);
+      setActiveSessionId(sessionId);
+      localStorage.setItem(ACTIVE_SESSION_KEY, String(sessionId));
+      setInput("");
+      setMessages(detail.messages.map((item) => ({ role: item.role, content: item.content })));
+      setLoading(readPendingJobs().some((job) => job.session_id === sessionId));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "会话读取失败。");
+    } finally {
+      if (showLoading && !readPendingJobs().some((job) => job.session_id === sessionId)) setLoading(false);
+    }
+  }
+
+  function startNewChat() {
+    setActiveSessionId(null);
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+    setMessages([]);
+    setInput("");
+    setLoading(false);
+  }
 
   async function submit(message = input) {
     const trimmed = message.trim();
@@ -33,13 +150,19 @@ export function ChatPanel() {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     try {
-      const result = await sendChat(trimmed);
-      setMessages((prev) => [...prev, { role: "assistant", content: result.text }]);
+      const job = await createChatJob(trimmed, activeSessionId);
+      setActiveSessionId(job.session_id);
+      localStorage.setItem(ACTIVE_SESSION_KEY, String(job.session_id));
+      const jobs = [...readPendingJobs().filter((item) => item.id !== job.id), job];
+      writePendingJobs(jobs);
+      setPendingJobs(jobs);
+      await refreshSessions();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "AI 回复失败。");
       setInput(trimmed);
-    } finally {
       setLoading(false);
+    } finally {
+      // Completion is handled by the background-job poller.
     }
   }
 
@@ -52,9 +175,15 @@ export function ChatPanel() {
     <PageShell>
       <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
         <Card className="flex min-h-[72vh] flex-col overflow-hidden">
-          <div className="border-b border-border px-5 py-4">
-            <h2 className="text-lg font-semibold">GPT 文字对话</h2>
-            <p className="mt-1 text-sm text-muted-foreground">用于策略、文案、代码、创意方向和深度问答。</p>
+          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+            <div>
+              <h2 className="text-lg font-semibold">GPT 文字对话</h2>
+              <p className="mt-1 text-sm text-muted-foreground">用于策略、文案、代码、创意方向和深度问答。</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={startNewChat}>
+              <Plus className="h-4 w-4" />
+              新对话
+            </Button>
           </div>
 
           <div className="soft-scrollbar flex-1 space-y-4 overflow-y-auto p-5">
@@ -132,19 +261,51 @@ export function ChatPanel() {
           </div>
         </Card>
 
-        <div className="space-y-4">
-          <Card className="p-5">
-            <h3 className="text-sm font-semibold">创作建议</h3>
-            <div className="mt-4 space-y-3 text-sm leading-6 text-muted-foreground">
-              <p>说明目标、受众、语气和输出格式，会得到更稳定的结果。</p>
-              <p>长任务可以拆成“先给提纲，再逐段扩写”。</p>
+        <Card className="p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">最近会话</h3>
+              <p className="mt-1 text-xs text-muted-foreground">保留最近 10 条，可继续原对话。</p>
             </div>
-          </Card>
-          <Card className="p-5">
-            <h3 className="text-sm font-semibold">历史保存</h3>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">每次成功回复都会写入后端 SQLite，可在历史记录页查看。</p>
-          </Card>
-        </div>
+            <Button variant="secondary" size="icon" onClick={startNewChat} aria-label="新对话">
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {sessionsLoading ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
+                正在读取...
+              </div>
+            ) : sessions.length === 0 ? (
+              <div className="grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
+                <div>
+                  <MessageSquareText className="mx-auto h-6 w-6 text-[#5B7CFF]" />
+                  <p className="mt-3 text-sm font-medium">还没有会话</p>
+                  <p className="mt-1 text-xs text-muted-foreground">发送第一条消息后会自动保存。</p>
+                </div>
+              </div>
+            ) : (
+              sessions.map((session) => (
+                <button
+                  key={session.id}
+                  onClick={() => openSession(session.id)}
+                  className={cn(
+                    "w-full rounded-2xl border border-border bg-background/70 p-3 text-left transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50",
+                    activeSessionId === session.id && "border-[#5B7CFF] bg-[#5B7CFF]/10"
+                  )}
+                >
+                  <div className="line-clamp-2 text-sm font-semibold">{session.title}</div>
+                  <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    {new Date(session.updated_at).toLocaleString()}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </Card>
       </div>
     </PageShell>
   );

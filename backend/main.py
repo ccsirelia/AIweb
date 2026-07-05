@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database.init_db import init_db
-from routes import admin, chat, history, image
+from routes import admin, auth, chat, history, image
 
 load_dotenv()
 
@@ -43,3 +43,4 @@ app.include_router(chat.router)
 app.include_router(image.router)
 app.include_router(history.router)
 app.include_router(admin.router)
+app.include_router(auth.router)

@@ -3,7 +3,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from database.models import UserAccount
@@ -17,6 +17,7 @@ from services.settings_service import (
     mask_secret,
     set_setting,
 )
+from services.auth_service import hash_password
 
 router = APIRouter(tags=["admin"])
 
@@ -55,7 +56,7 @@ def render_users(users: list[UserAccount]) -> str:
                   <div class="avatar">{escape(user.name[:1].upper())}</div>
                   <div>
                     <strong>{escape(user.name)}</strong>
-                    <span>{escape(user.email)}</span>
+                    <span>@{escape(user.username)} · {escape(user.email)}</span>
                   </div>
                 </div>
               </td>
@@ -342,10 +343,14 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
               </div>
               <div class="card-body">
                 <form method="post" action="/admin/users">
-                  <div class="grid" style="grid-template-columns: 1fr 1fr 160px; gap: 12px;">
+                  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 160px; gap: 12px;">
                     <div class="field">
                       <label for="name">姓名</label>
                       <input id="name" name="name" required maxlength="120" placeholder="例如：Admin" />
+                    </div>
+                    <div class="field">
+                      <label for="username">用户名</label>
+                      <input id="username" name="username" required maxlength="80" placeholder="admin" />
                     </div>
                     <div class="field">
                       <label for="email">邮箱</label>
@@ -359,6 +364,10 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
                         <option value="viewer">viewer</option>
                       </select>
                     </div>
+                  </div>
+                  <div class="field">
+                    <label for="password">初始密码</label>
+                    <input id="password" name="password" type="password" required minlength="6" maxlength="128" placeholder="至少 6 位" />
                   </div>
                   <button class="button" type="submit">添加用户</button>
                 </form>
@@ -394,16 +403,20 @@ async def update_settings(request: Request, db: Session = Depends(get_db)) -> Re
 async def create_user(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
     data = await read_form(request)
     name = data.get("name", "").strip()
+    username = data.get("username", "").strip().lower()
     email = data.get("email", "").strip().lower()
+    password = data.get("password", "").strip()
     role = data.get("role", "member").strip()
-    if not name or not email:
-        return redirect_admin("姓名和邮箱不能为空")
+    if not name or not username or not email or not password:
+        return redirect_admin("姓名、用户名、邮箱和密码不能为空")
+    if len(password) < 6:
+        return redirect_admin("密码至少需要 6 位")
     if role not in {"admin", "member", "viewer"}:
         role = "member"
-    existing = db.query(UserAccount).filter(UserAccount.email == email).first()
+    existing = db.query(UserAccount).filter(or_(UserAccount.username == username, UserAccount.email == email)).first()
     if existing:
-        return redirect_admin("该邮箱已存在")
-    db.add(UserAccount(name=name[:120], email=email[:255], role=role))
+        return redirect_admin("用户名或邮箱已存在")
+    db.add(UserAccount(username=username[:80], name=name[:120], email=email[:255], password_hash=hash_password(password), role=role))
     db.commit()
     return redirect_admin("用户已添加")
 

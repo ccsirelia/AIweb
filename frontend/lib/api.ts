@@ -5,6 +5,30 @@ export type ChatRecord = {
   created_at: string;
 };
 
+export type ChatMessage = {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+export type ChatSession = {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatJob = {
+  id: number;
+  session_id: number;
+  status: "pending" | "running" | "completed" | "failed";
+  error: string;
+  created_at: string;
+  completed_at: string | null;
+};
+
 export type ImageRecord = {
   id: number;
   prompt: string;
@@ -14,13 +38,55 @@ export type ImageRecord = {
   created_at: string;
 };
 
+export type User = {
+  id: number;
+  username: string;
+  name: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+};
+
+export type AuthResponse = {
+  token: string;
+  user: User;
+};
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
+export function getAuthToken() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("aiweb_token") ?? "";
+}
+
+export function setAuthSession(payload: AuthResponse) {
+  localStorage.setItem("aiweb_token", payload.token);
+  localStorage.setItem("aiweb_user", JSON.stringify(payload.user));
+}
+
+export function clearAuthSession() {
+  localStorage.removeItem("aiweb_token");
+  localStorage.removeItem("aiweb_user");
+}
+
+export function getStoredUser(): User | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("aiweb_user");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as User;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {})
     },
     cache: "no-store"
@@ -40,11 +106,48 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function sendChat(message: string) {
-  return request<{ text: string }>("/api/chat", {
+export function login(payload: { account: string; password: string }) {
+  return request<AuthResponse>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ message })
+    body: JSON.stringify(payload)
   });
+}
+
+export function register(payload: { username: string; name: string; email: string; password: string }) {
+  return request<AuthResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getMe() {
+  return request<User>("/api/auth/me");
+}
+
+export function sendChat(message: string, sessionId?: number | null) {
+  return request<{ text: string; session_id: number }>("/api/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, session_id: sessionId ?? null })
+  });
+}
+
+export function createChatJob(message: string, sessionId?: number | null) {
+  return request<ChatJob>("/api/chat/jobs", {
+    method: "POST",
+    body: JSON.stringify({ message, session_id: sessionId ?? null })
+  });
+}
+
+export function getChatJob(jobId: number) {
+  return request<ChatJob>(`/api/chat/jobs/${jobId}`);
+}
+
+export function getChatSessions() {
+  return request<ChatSession[]>("/api/chat/sessions");
+}
+
+export function getChatSession(sessionId: number) {
+  return request<{ session: ChatSession; messages: ChatMessage[] }>(`/api/chat/sessions/${sessionId}`);
 }
 
 export function generateImage(payload: { prompt: string; style: string; size: string }) {
@@ -56,4 +159,8 @@ export function generateImage(payload: { prompt: string; style: string; size: st
 
 export function getHistory() {
   return request<{ chats: ChatRecord[]; images: ImageRecord[] }>("/api/history");
+}
+
+export function getRecentImages() {
+  return request<ImageRecord[]>("/api/images");
 }

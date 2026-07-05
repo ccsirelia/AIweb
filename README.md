@@ -1,6 +1,6 @@
 # AIWeb Studio
 
-一个前后端分离的 AI 创作网站，支持 GPT 文字对话、AI 生图、历史记录、主题切换和 SQLite 存储。
+一个前后端分离的 AI 创作网站，支持用户注册登录、GPT 文字对话、AI 生图、历史记录、主题切换和 SQLite 存储。聊天页支持最近 10 条会话、继续原会话和新对话；生图页支持最近 10 张持久图库预览和原图下载。
 
 ## 项目结构
 
@@ -66,6 +66,8 @@ OPENAI_IMAGE_MODEL=gpt-image-1
 DATABASE_URL=sqlite:///./aiweb.db
 FRONTEND_ORIGIN=http://localhost:3000
 RATE_LIMIT_PER_MINUTE=30
+AUTH_SECRET_KEY=change-this-long-random-secret
+AUTH_TOKEN_TTL_SECONDS=604800
 ```
 
 初始化数据库：
@@ -113,11 +115,38 @@ npm.cmd run dev
 
 ## 接口
 
+`POST /api/auth/register`
+
+```json
+{
+  "username": "demo",
+  "name": "Demo User",
+  "email": "demo@example.com",
+  "password": "secret123"
+}
+```
+
+`POST /api/auth/login`
+
+```json
+{ "account": "demo", "password": "secret123" }
+```
+
+登录后前端会保存 Bearer Token，并在聊天、生图和历史接口中自动携带。
+
 `POST /api/chat`
 
 ```json
-{ "message": "你好，请介绍一下你自己" }
+{ "message": "你好，请介绍一下你自己", "session_id": null }
 ```
+
+`GET /api/chat/sessions`
+
+返回最近 10 条聊天会话。
+
+`GET /api/chat/sessions/{session_id}`
+
+返回指定会话及其消息列表。
 
 `POST /api/image`
 
@@ -133,12 +162,19 @@ npm.cmd run dev
 
 返回最近 50 条聊天记录和图片记录。
 
+`GET /api/images`
+
+返回最近 10 张生成图片，用于生图页右侧持久图库。
+
 ## 数据库设计
 
 开发阶段使用 SQLite：
 
 - `chat_records`: `id`, `user_message`, `ai_response`, `created_at`
-- `image_records`: `id`, `prompt`, `style`, `size`, `image_base64`, `created_at`
+- `chat_sessions`: `id`, `user_id`, `title`, `created_at`, `updated_at`
+- `chat_messages`: `id`, `session_id`, `role`, `content`, `created_at`
+- `image_records`: `id`, `user_id`, `prompt`, `style`, `size`, `image_base64`, `created_at`
+- `user_accounts`: `id`, `username`, `name`, `email`, `password_hash`, `role`, `is_active`, `created_at`
 
 后续迁移 PostgreSQL 时，把 `DATABASE_URL` 改成 PostgreSQL 连接串，并引入 Alembic 做迁移即可。
 

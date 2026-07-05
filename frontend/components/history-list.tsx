@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Clock, ImageIcon, Loader2, MessageSquareText } from "lucide-react";
 import { toast } from "sonner";
 
-import { getHistory, type ChatRecord, type ImageRecord } from "@/lib/api";
+import { getAuthToken, getHistory, type ChatRecord, type ImageRecord } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Card } from "@/components/ui/card";
 
@@ -12,8 +13,13 @@ export function HistoryList() {
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
+    if (!getAuthToken()) {
+      router.push("/login");
+      return;
+    }
     getHistory()
       .then((data) => {
         setChats(data.chats);
@@ -21,7 +27,7 @@ export function HistoryList() {
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "历史记录加载失败。"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [router]);
 
   return (
     <PageShell>
