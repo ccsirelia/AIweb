@@ -4,3 +4,4 @@ openai==2.44.0
 python-dotenv==1.0.1
 pydantic==2.10.4
 SQLAlchemy==2.0.36
+python-multipart==0.0.20

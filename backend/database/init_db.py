@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from database.models import AppSetting, ChatJob, ChatMessage, ChatRecord, ChatSession, ImageRecord, UserAccount
+from database.models import AppSetting, ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, ImageRecord, UserAccount
 from database.session import Base, engine
 
 

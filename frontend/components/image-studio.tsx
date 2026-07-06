@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Download, ImageIcon, Loader2, RefreshCcw, WandSparkles } from "lucide-react";
 import { motion } from "framer-motion";
@@ -11,23 +11,51 @@ import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 const styles = ["写实", "动漫", "3D", "油画", "产品图", "摄影"];
-const sizes = [
-  { label: "1:1", value: "1024x1024" },
-  { label: "16:9", value: "1536x864" },
-  { label: "9:16", value: "864x1536" }
-];
+const aspectRatios = ["16:9", "1:1", "9:16"] as const;
+const qualities = ["1k", "2k", "4k"] as const;
+const presetSizes = {
+  "16:9": { "1k": "1920x1024", "2k": "2560x1440", "4k": "3840x2160" },
+  "1:1": { "1k": "1024x1024", "2k": "2560x2560", "4k": "3840x3840" },
+  "9:16": { "1k": "1024x1920", "2k": "1440x2560", "4k": "2160x3840" }
+} as const;
+
+type AspectRatio = keyof typeof presetSizes;
+type Quality = keyof (typeof presetSizes)["1:1"];
+
+function validateImage2Size(width: number, height: number) {
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return "宽高必须是整数。";
+  if (width < 512 || height < 512) return "宽高不能小于 512。";
+  if (width > 3840 || height > 3840) return "宽高不能超过 3840。";
+  if (width % 16 !== 0 || height % 16 !== 0) return "image2 要求宽高都能被 16 整除。";
+  const ratio = width / height;
+  if (ratio < 1 / 3 || ratio > 3) return "比例必须在 1:3 到 3:1 之间。";
+  if (width * height > 3840 * 3840) return "像素总量不能超过 3840x3840。";
+  return "";
+}
 
 export function ImageStudio() {
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("写实");
-  const [size, setSize] = useState("1024x1024");
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("1:1");
+  const [quality, setQuality] = useState<Quality>("1k");
+  const [customSizeEnabled, setCustomSizeEnabled] = useState(false);
+  const [customWidth, setCustomWidth] = useState(1024);
+  const [customHeight, setCustomHeight] = useState(1024);
   const [image, setImage] = useState("");
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
   const router = useRouter();
+
+  const size = useMemo(() => {
+    if (customSizeEnabled) return `${customWidth}x${customHeight}`;
+    return presetSizes[aspectRatio][quality];
+  }, [aspectRatio, customHeight, customSizeEnabled, customWidth, quality]);
+
+  const customSizeError = customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -59,10 +87,20 @@ export function ImageStudio() {
       toast.error("Prompt 不能超过 1200 个字符。");
       return;
     }
+    if (customSizeError) {
+      toast.error(customSizeError);
+      return;
+    }
 
     setLoading(true);
     try {
-      const result = await generateImage({ prompt: trimmed, style, size });
+      const result = await generateImage({
+        prompt: trimmed,
+        style,
+        size,
+        aspect_ratio: customSizeEnabled ? "custom" : aspectRatio,
+        quality: customSizeEnabled ? "custom" : quality
+      });
       setImage(result.image_base64);
       await refreshImages();
       toast.success("图片生成完成。");
@@ -83,8 +121,18 @@ export function ImageStudio() {
   function openHistoryImage(record: ImageRecord) {
     setImage(record.image_base64);
     setPrompt(record.prompt);
-    setStyle(record.style);
-    setSize(record.size);
+    setStyle(styles.includes(record.style) ? record.style : "写实");
+    const [width, height] = record.size.split("x").map(Number);
+    const preset = aspectRatios.flatMap((ratio) => qualities.map((item) => ({ ratio, quality: item, size: presetSizes[ratio][item] }))).find((item) => item.size === record.size);
+    if (preset) {
+      setCustomSizeEnabled(false);
+      setAspectRatio(preset.ratio);
+      setQuality(preset.quality);
+    } else if (width && height) {
+      setCustomSizeEnabled(true);
+      setCustomWidth(width);
+      setCustomHeight(height);
+    }
   }
 
   return (
@@ -121,9 +169,10 @@ export function ImageStudio() {
                   <button
                     key={item}
                     onClick={() => setStyle(item)}
-                    className={`h-10 rounded-xl border text-sm transition hover:scale-[1.02] ${
+                    className={cn(
+                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
                       style === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
-                    }`}
+                    )}
                   >
                     {item}
                   </button>
@@ -132,23 +181,74 @@ export function ImageStudio() {
             </div>
 
             <div>
-              <label className="text-sm font-medium">尺寸</label>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {sizes.map((item) => (
-                  <button
-                    key={item.value}
-                    onClick={() => setSize(item.value)}
-                    className={`h-10 rounded-xl border text-sm transition hover:scale-[1.02] ${
-                      size === item.value ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium">比例</label>
+                <button className="text-xs text-[#5B7CFF] transition hover:text-[#466BFF]" onClick={() => setCustomSizeEnabled((value) => !value)}>
+                  {customSizeEnabled ? "使用预设" : "自定义分辨率"}
+                </button>
+              </div>
+              {!customSizeEnabled ? (
+                <>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {aspectRatios.map((item) => (
+                      <button
+                        key={item}
+                        onClick={() => setAspectRatio(item)}
+                        className={cn(
+                          "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
+                          aspectRatio === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                        )}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {qualities.map((item) => (
+                      <button
+                        key={item}
+                        onClick={() => setQuality(item)}
+                        className={cn(
+                          "h-10 rounded-xl border text-sm uppercase transition hover:scale-[1.02]",
+                          quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                        )}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    value={customWidth}
+                    min={512}
+                    max={3840}
+                    step={16}
+                    type="number"
+                    className="h-10 rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
+                    onChange={(event) => setCustomWidth(Number(event.target.value))}
+                    aria-label="自定义宽度"
+                  />
+                  <input
+                    value={customHeight}
+                    min={512}
+                    max={3840}
+                    step={16}
+                    type="number"
+                    className="h-10 rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
+                    onChange={(event) => setCustomHeight(Number(event.target.value))}
+                    aria-label="自定义高度"
+                  />
+                </div>
+              )}
+              <div className={cn("mt-2 rounded-xl border px-3 py-2 text-xs", customSizeError ? "border-red-500/40 bg-red-500/10 text-red-600" : "border-border bg-background/70 text-muted-foreground")}>
+                当前尺寸：{size}
+                {customSizeError ? ` · ${customSizeError}` : ""}
               </div>
             </div>
 
-            <Button className="w-full" disabled={loading || !prompt.trim()} onClick={() => createImage()}>
+            <Button className="w-full" disabled={loading || !prompt.trim() || Boolean(customSizeError)} onClick={() => createImage()}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
               生成图片
             </Button>
@@ -174,12 +274,12 @@ export function ImageStudio() {
                   <ImageIcon className="h-6 w-6" />
                 </div>
                 <h3 className="mt-5 text-xl font-semibold">等待生成第一张作品</h3>
-                <p className="mt-2 text-sm text-muted-foreground">选择风格和比例，然后让 Prompt 变成画面。</p>
+                <p className="mt-2 text-sm text-muted-foreground">选择风格、比例和清晰度，然后让 Prompt 变成画面。</p>
               </div>
             )}
           </div>
           <div className="mt-4 flex justify-end gap-2">
-            <Button variant="secondary" disabled={!prompt.trim() || loading} onClick={() => createImage(prompt)}>
+            <Button variant="secondary" disabled={!prompt.trim() || loading || Boolean(customSizeError)} onClick={() => createImage(prompt)}>
               <RefreshCcw className="h-4 w-4" />
               重新生成
             </Button>
@@ -224,7 +324,9 @@ export function ImageStudio() {
                   <div className="p-3">
                     <p className="line-clamp-2 text-xs font-medium">{record.prompt}</p>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">{record.style}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {record.style} · {record.size}
+                      </span>
                       <button
                         className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-card text-[#5B7CFF] transition hover:scale-[1.04]"
                         onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}

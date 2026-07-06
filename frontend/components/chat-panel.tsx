@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Clock3, Copy, Loader2, MessageSquareText, Plus, RefreshCcw, SendHorizontal } from "lucide-react";
+import { Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { createChatJob, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession } from "@/lib/api";
@@ -19,6 +19,7 @@ type Message = {
 
 const ACTIVE_SESSION_KEY = "aiweb_active_chat_session_id";
 const PENDING_JOBS_KEY = "aiweb_pending_chat_jobs";
+const FILE_ACCEPT = "image/*,.txt,.md,.csv,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.py,.js,.jsx,.ts,.tsx,.html,.css,.xml,.yaml,.yml";
 
 function readPendingJobs(): ChatJob[] {
   if (typeof window === "undefined") return [];
@@ -43,6 +44,7 @@ export function ChatPanel() {
   const [loading, setLoading] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState<ChatJob[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const router = useRouter();
   const lastUserMessage = useMemo(() => [...messages].reverse().find((item) => item.role === "user")?.content, [messages]);
 
@@ -90,7 +92,7 @@ export function ChatPanel() {
         } else {
           nextJobs.push(latest);
         }
-      } catch (error) {
+      } catch {
         nextJobs.push(job);
       }
     }
@@ -121,6 +123,7 @@ export function ChatPanel() {
       setActiveSessionId(sessionId);
       localStorage.setItem(ACTIVE_SESSION_KEY, String(sessionId));
       setInput("");
+      setSelectedFiles([]);
       setMessages(detail.messages.map((item) => ({ role: item.role, content: item.content })));
       setLoading(readPendingJobs().some((job) => job.session_id === sessionId));
     } catch (error) {
@@ -135,22 +138,42 @@ export function ChatPanel() {
     localStorage.removeItem(ACTIVE_SESSION_KEY);
     setMessages([]);
     setInput("");
+    setSelectedFiles([]);
     setLoading(false);
   }
 
-  async function submit(message = input) {
+  function addFiles(fileList: FileList | null) {
+    if (!fileList) return;
+    const next = [...selectedFiles, ...Array.from(fileList)];
+    const unique = next.filter((file, index, array) => array.findIndex((item) => item.name === file.name && item.size === file.size) === index);
+    setSelectedFiles(unique.slice(0, 5));
+    if (unique.length > 5) toast.warning("已保留前 5 个附件。");
+  }
+
+  function removeFile(index: number) {
+    setSelectedFiles((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  async function submit(message = input, files = selectedFiles) {
     const trimmed = message.trim();
-    if (!trimmed) return;
+    if (!trimmed && files.length === 0) return;
     if (trimmed.length > 4000) {
       toast.error("输入不能超过 4000 个字符。");
+      return;
+    }
+    if (files.length > 5) {
+      toast.error("一次最多上传 5 个附件。");
       return;
     }
 
     setLoading(true);
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+    setSelectedFiles([]);
+    const fallbackMessage = trimmed || "请分析这些附件。";
+    const attachmentText = files.length ? `\n\n附件：${files.map((file) => file.name).join(", ")}` : "";
+    setMessages((prev) => [...prev, { role: "user", content: `${fallbackMessage}${attachmentText}` }]);
     try {
-      const job = await createChatJob(trimmed, activeSessionId);
+      const job = await createChatJob(fallbackMessage, activeSessionId, files);
       setActiveSessionId(job.session_id);
       localStorage.setItem(ACTIVE_SESSION_KEY, String(job.session_id));
       const jobs = [...readPendingJobs().filter((item) => item.id !== job.id), job];
@@ -160,9 +183,8 @@ export function ChatPanel() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "AI 回复失败。");
       setInput(trimmed);
+      setSelectedFiles(files);
       setLoading(false);
-    } finally {
-      // Completion is handled by the background-job poller.
     }
   }
 
@@ -194,9 +216,7 @@ export function ChatPanel() {
                     <SendHorizontal className="h-6 w-6" />
                   </div>
                   <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                    例如：帮我为一家高端咖啡品牌生成一套小红书内容策划。
-                  </p>
+                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">也可以上传图片、文本或常见办公文档，让 AI 结合附件继续分析。</p>
                 </div>
               </div>
             ) : (
@@ -235,10 +255,23 @@ export function ChatPanel() {
 
           <div className="border-t border-border p-4">
             <div className="flex flex-col gap-3">
+              {selectedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedFiles.map((file, index) => (
+                    <div key={`${file.name}-${file.size}`} className="inline-flex max-w-full items-center gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-xs">
+                      <FileText className="h-3.5 w-3.5 text-[#5B7CFF]" />
+                      <span className="max-w-[220px] truncate">{file.name}</span>
+                      <button className="rounded-md p-0.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" onClick={() => removeFile(index)} aria-label="移除附件">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <Textarea
                 value={input}
                 maxLength={4000}
-                placeholder="输入你的问题或创作需求..."
+                placeholder="输入你的问题或创作需求，Enter 发送，Shift + Enter 换行..."
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -248,13 +281,21 @@ export function ChatPanel() {
                 }}
               />
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">{input.length}/4000</span>
+                <div className="flex items-center gap-2">
+                  <input id="chat-attachments" type="file" multiple accept={FILE_ACCEPT} className="hidden" onChange={(event) => addFiles(event.target.files)} />
+                  <Button asChild variant="secondary" size="icon" aria-label="上传附件">
+                    <label htmlFor="chat-attachments" className="cursor-pointer">
+                      <Paperclip className="h-4 w-4" />
+                    </label>
+                  </Button>
+                  <span className="text-xs text-muted-foreground">{input.length}/4000</span>
+                </div>
                 <div className="flex gap-2">
-                  <Button variant="secondary" disabled={!lastUserMessage || loading} onClick={() => lastUserMessage && submit(lastUserMessage)}>
+                  <Button variant="secondary" disabled={!lastUserMessage || loading} onClick={() => lastUserMessage && submit(lastUserMessage, [])}>
                     <RefreshCcw className="h-4 w-4" />
                     重新生成
                   </Button>
-                  <Button disabled={loading || !input.trim()} onClick={() => submit()}>
+                  <Button disabled={loading || (!input.trim() && selectedFiles.length === 0)} onClick={() => submit()}>
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
                     发送
                   </Button>

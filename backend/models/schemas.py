@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 
 
 ImageStyle = Literal["写实", "动漫", "3D", "油画", "产品图", "摄影"]
-ImageSize = Literal["1024x1024", "1536x864", "864x1536"]
+ImageAspectRatio = Literal["16:9", "1:1", "9:16", "custom"]
+ImageQuality = Literal["1k", "2k", "4k", "custom"]
 
 
 class RegisterRequest(BaseModel):
@@ -62,7 +63,9 @@ class ChatJobOut(BaseModel):
 class ImageRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=1200)
     style: ImageStyle = "写实"
-    size: ImageSize = "1024x1024"
+    size: str = Field("1024x1024", min_length=7, max_length=20, pattern=r"^\d{2,5}x\d{2,5}$")
+    aspect_ratio: ImageAspectRatio = "1:1"
+    quality: ImageQuality = "1k"
 
 
 class ImageResponse(BaseModel):

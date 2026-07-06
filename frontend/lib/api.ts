@@ -82,10 +82,11 @@ export function getStoredUser(): User | null {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken();
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {})
     },
@@ -131,7 +132,18 @@ export function sendChat(message: string, sessionId?: number | null) {
   });
 }
 
-export function createChatJob(message: string, sessionId?: number | null) {
+export function createChatJob(message: string, sessionId?: number | null, files?: File[]) {
+  if (files?.length) {
+    const form = new FormData();
+    form.append("message", message);
+    if (sessionId) form.append("session_id", String(sessionId));
+    files.forEach((file) => form.append("files", file));
+    return request<ChatJob>("/api/chat/jobs", {
+      method: "POST",
+      body: form
+    });
+  }
+
   return request<ChatJob>("/api/chat/jobs", {
     method: "POST",
     body: JSON.stringify({ message, session_id: sessionId ?? null })
@@ -150,7 +162,7 @@ export function getChatSession(sessionId: number) {
   return request<{ session: ChatSession; messages: ChatMessage[] }>(`/api/chat/sessions/${sessionId}`);
 }
 
-export function generateImage(payload: { prompt: string; style: string; size: string }) {
+export function generateImage(payload: { prompt: string; style: string; size: string; aspect_ratio?: string; quality?: string }) {
   return request<{ image_base64: string }>("/api/image", {
     method: "POST",
     body: JSON.stringify(payload)
