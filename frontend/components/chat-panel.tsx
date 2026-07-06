@@ -241,7 +241,10 @@ export function ChatPanel() {
                 placeholder="输入你的问题或创作需求..."
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submit();
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    submit();
+                  }
                 }}
               />
               <div className="flex items-center justify-between gap-3">

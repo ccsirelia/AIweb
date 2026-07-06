@@ -113,6 +113,38 @@ npm.cmd install
 npm.cmd run dev
 ```
 
+## 一键启停脚本
+
+项目根目录提供了只管理当前项目进程的启停脚本。脚本会把 PID 和日志写入 `.runtime/`，停止时只根据本项目 PID 文件和命令行校验停止 AIWeb 服务，避免误伤其他项目。
+
+默认端口：
+
+- 前端：`5008`
+- 后端：`8008`
+
+Windows：
+
+```bat
+AIWeb-start.bat
+AIWeb-stop.bat
+AIWeb-restart.bat
+```
+
+Linux：
+
+```bash
+chmod +x aiweb-start.sh aiweb-stop.sh aiweb-restart.sh
+./aiweb-start.sh
+./aiweb-stop.sh
+./aiweb-restart.sh
+```
+
+Linux 可通过环境变量临时改端口：
+
+```bash
+FRONTEND_PORT=5008 BACKEND_PORT=8008 ./aiweb-start.sh
+```
+
 ## 接口
 
 `POST /api/auth/register`
