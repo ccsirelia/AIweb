@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, X } from "lucide-react";
+import { Brain, Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { toast } from "sonner";
 
 import { createChatJob, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession } from "@/lib/api";
@@ -15,6 +19,11 @@ import { cn } from "@/lib/utils";
 type Message = {
   role: "user" | "assistant";
   content: string;
+};
+
+type ParsedAssistantContent = {
+  thought: string;
+  answer: string;
 };
 
 const ACTIVE_SESSION_KEY = "aiweb_active_chat_session_id";
@@ -34,6 +43,55 @@ function readPendingJobs(): ChatJob[] {
 
 function writePendingJobs(jobs: ChatJob[]) {
   localStorage.setItem(PENDING_JOBS_KEY, JSON.stringify(jobs));
+}
+
+function parseAssistantContent(content: string): ParsedAssistantContent {
+  const thought = content.match(/<ai_thought_summary>\s*([\s\S]*?)\s*<\/ai_thought_summary>/i)?.[1]?.trim() ?? "";
+  const answer = content.match(/<ai_answer>\s*([\s\S]*?)\s*<\/ai_answer>/i)?.[1]?.trim() ?? "";
+  if (answer) return { thought, answer };
+  return { thought: "", answer: content };
+}
+
+function normalizeMathDelimiters(content: string) {
+  return content
+    .replace(/\\\[((?:.|\n)*?)\\\]/g, (_match, formula: string) => `\n\n$$\n${formula.trim()}\n$$\n\n`)
+    .replace(/\\\(((?:.|\n)*?)\\\)/g, (_match, formula: string) => `$${formula.trim()}$`)
+    .replace(/(^|\n)\s*\[\s*([^\]\n]*(?:\\[a-zA-Z]+|[=^_{}+\-*/]|[a-zA-Z]\s*\^)[^\]\n]*)\s*\]\s*(?=\n|$)/g, (_match, prefix: string, formula: string) => {
+      return `${prefix}\n$$\n${formula.trim()}\n$$\n`;
+    });
+}
+
+function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
+  const normalizedContent = normalizeMathDelimiters(content);
+
+  return (
+    <div className={cn("markdown-body", compact && "markdown-body-compact")}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+          code: ({ className, children, ...props }) => {
+            const isInline = !className;
+            if (isInline) {
+              return (
+                <code className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[0.92em] dark:bg-white/[0.08]" {...props}>
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          }
+      }}
+    >
+      {normalizedContent}
+    </ReactMarkdown>
+    </div>
+  );
 }
 
 export function ChatPanel() {
@@ -193,6 +251,32 @@ export function ChatPanel() {
     toast.success("已复制回复。");
   }
 
+  function renderAssistantMessage(content: string) {
+    const parsed = parseAssistantContent(content);
+    return (
+      <>
+        {parsed.thought && (
+          <details className="mb-3 rounded-xl border border-[#5B7CFF]/20 bg-[#5B7CFF]/5 px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-[#5B7CFF]">
+              <Brain className="h-3.5 w-3.5" />
+              详细思考说明
+            </summary>
+            <div className="mt-2 text-muted-foreground">
+              <MarkdownContent content={parsed.thought} compact />
+            </div>
+          </details>
+        )}
+        <MarkdownContent content={parsed.answer} />
+        <div className="mt-3 flex justify-end">
+          <Button variant="ghost" size="sm" onClick={() => copyText(parsed.answer)}>
+            <Copy className="h-3.5 w-3.5" />
+            复制
+          </Button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <PageShell>
       <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
@@ -200,7 +284,7 @@ export function ChatPanel() {
           <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
             <div>
               <h2 className="text-lg font-semibold">GPT 文字对话</h2>
-              <p className="mt-1 text-sm text-muted-foreground">用于策略、文案、代码、创意方向和深度问答。</p>
+              <p className="mt-1 text-sm text-muted-foreground">支持 Markdown、数学公式、代码块和附件分析。</p>
             </div>
             <Button variant="secondary" size="sm" onClick={startNewChat}>
               <Plus className="h-4 w-4" />
@@ -216,7 +300,7 @@ export function ChatPanel() {
                     <SendHorizontal className="h-6 w-6" />
                   </div>
                   <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">也可以上传图片、文本或常见办公文档，让 AI 结合附件继续分析。</p>
+                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">可以上传图片、文本或常见办公文档，也可以直接输入含公式的问题。</p>
                 </div>
               </div>
             ) : (
@@ -229,15 +313,7 @@ export function ChatPanel() {
                         : "max-w-[86%] rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6"
                     }
                   >
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                    {message.role === "assistant" && (
-                      <div className="mt-3 flex justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => copyText(message.content)}>
-                          <Copy className="h-3.5 w-3.5" />
-                          复制
-                        </Button>
-                      </div>
-                    )}
+                    {message.role === "assistant" ? renderAssistantMessage(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
                   </div>
                 </div>
               ))
@@ -247,7 +323,7 @@ export function ChatPanel() {
               <div className="flex justify-start">
                 <div className="flex items-center gap-3 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                  AI 正在组织回复...
+                  AI 正在思考并组织回复...
                 </div>
               </div>
             )}
