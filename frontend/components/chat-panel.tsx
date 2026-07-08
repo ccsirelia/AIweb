@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, X } from "lucide-react";
+import { Brain, Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, Trash2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { toast } from "sonner";
 
-import { createChatJob, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession } from "@/lib/api";
+import { createChatJob, deleteChatSession, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession, type Provider } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,7 +28,12 @@ type ParsedAssistantContent = {
 
 const ACTIVE_SESSION_KEY = "aiweb_active_chat_session_id";
 const PENDING_JOBS_KEY = "aiweb_pending_chat_jobs";
+const CHAT_PROVIDER_KEY = "aiweb_chat_provider";
 const FILE_ACCEPT = "image/*,.txt,.md,.csv,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.py,.js,.jsx,.ts,.tsx,.html,.css,.xml,.yaml,.yml";
+const providers: { label: string; value: Provider }[] = [
+  { label: "OpenAI", value: "openai" },
+  { label: "Gork", value: "gork" }
+];
 
 function readPendingJobs(): ChatJob[] {
   if (typeof window === "undefined") return [];
@@ -86,10 +91,10 @@ function MarkdownContent({ content, compact = false }: { content: string; compac
               </code>
             );
           }
-      }}
-    >
-      {normalizedContent}
-    </ReactMarkdown>
+        }}
+      >
+        {normalizedContent}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -101,8 +106,10 @@ export function ChatPanel() {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [pendingJobs, setPendingJobs] = useState<ChatJob[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [provider, setProvider] = useState<Provider>("openai");
   const router = useRouter();
   const lastUserMessage = useMemo(() => [...messages].reverse().find((item) => item.role === "user")?.content, [messages]);
 
@@ -110,6 +117,10 @@ export function ChatPanel() {
     if (!getAuthToken()) {
       router.push("/login");
       return;
+    }
+    const storedProvider = localStorage.getItem(CHAT_PROVIDER_KEY);
+    if (storedProvider === "openai" || storedProvider === "gork") {
+      setProvider(storedProvider);
     }
     const storedSessionId = Number(localStorage.getItem(ACTIVE_SESSION_KEY) || "");
     const storedJobs = readPendingJobs();
@@ -191,6 +202,11 @@ export function ChatPanel() {
     }
   }
 
+  function changeProvider(value: Provider) {
+    setProvider(value);
+    localStorage.setItem(CHAT_PROVIDER_KEY, value);
+  }
+
   function startNewChat() {
     setActiveSessionId(null);
     localStorage.removeItem(ACTIVE_SESSION_KEY);
@@ -198,6 +214,39 @@ export function ChatPanel() {
     setInput("");
     setSelectedFiles([]);
     setLoading(false);
+  }
+
+  async function deleteSession(sessionId: number) {
+    const session = sessions.find((item) => item.id === sessionId);
+    const ok = window.confirm(`确定删除「${session?.title ?? "这个会话"}」吗？删除后该会话内容无法恢复。`);
+    if (!ok) return;
+
+    setDeletingSessionId(sessionId);
+    try {
+      await deleteChatSession(sessionId);
+      const nextJobs = readPendingJobs().filter((job) => job.session_id !== sessionId);
+      writePendingJobs(nextJobs);
+      setPendingJobs(nextJobs);
+
+      if (activeSessionId === sessionId) {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        setActiveSessionId(null);
+        setMessages([]);
+        setInput("");
+        setSelectedFiles([]);
+        setLoading(false);
+      } else {
+        setLoading(nextJobs.some((job) => job.session_id === activeSessionId));
+      }
+
+      setSessions((prev) => prev.filter((item) => item.id !== sessionId));
+      await refreshSessions();
+      toast.success("会话已删除。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "会话删除失败。");
+    } finally {
+      setDeletingSessionId(null);
+    }
   }
 
   function addFiles(fileList: FileList | null) {
@@ -231,7 +280,7 @@ export function ChatPanel() {
     const attachmentText = files.length ? `\n\n附件：${files.map((file) => file.name).join(", ")}` : "";
     setMessages((prev) => [...prev, { role: "user", content: `${fallbackMessage}${attachmentText}` }]);
     try {
-      const job = await createChatJob(fallbackMessage, activeSessionId, files);
+      const job = await createChatJob(fallbackMessage, activeSessionId, files, provider);
       setActiveSessionId(job.session_id);
       localStorage.setItem(ACTIVE_SESSION_KEY, String(job.session_id));
       const jobs = [...readPendingJobs().filter((item) => item.id !== job.id), job];
@@ -284,12 +333,28 @@ export function ChatPanel() {
           <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
             <div>
               <h2 className="text-lg font-semibold">GPT 文字对话</h2>
-              <p className="mt-1 text-sm text-muted-foreground">支持 Markdown、数学公式、代码块和附件分析。</p>
+              <p className="mt-1 text-sm text-muted-foreground">支持 OpenAI / Gork 通道、Markdown、数学公式、代码块和附件分析。</p>
             </div>
-            <Button variant="secondary" size="sm" onClick={startNewChat}>
-              <Plus className="h-4 w-4" />
-              新对话
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex rounded-xl border border-border bg-background/70 p-1">
+                {providers.map((item) => (
+                  <button
+                    key={item.value}
+                    onClick={() => changeProvider(item.value)}
+                    className={cn(
+                      "h-8 rounded-lg px-3 text-xs font-semibold transition",
+                      provider === item.value ? "bg-[#5B7CFF] text-white shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <Button variant="secondary" size="sm" onClick={startNewChat}>
+                <Plus className="h-4 w-4" />
+                新对话
+              </Button>
+            </div>
           </div>
 
           <div className="soft-scrollbar flex-1 space-y-4 overflow-y-auto p-5">
@@ -300,7 +365,7 @@ export function ChatPanel() {
                     <SendHorizontal className="h-6 w-6" />
                   </div>
                   <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">可以上传图片、文本或常见办公文档，也可以直接输入含公式的问题。</p>
+                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">选择通道后发送消息，API Key 始终只在后端使用。</p>
                 </div>
               </div>
             ) : (
@@ -323,7 +388,7 @@ export function ChatPanel() {
               <div className="flex justify-start">
                 <div className="flex items-center gap-3 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                  AI 正在思考并组织回复...
+                  AI 正在通过 {provider === "gork" ? "Gork" : "OpenAI"} 通道组织回复...
                 </div>
               </div>
             )}
@@ -408,20 +473,32 @@ export function ChatPanel() {
               </div>
             ) : (
               sessions.map((session) => (
-                <button
+                <div
                   key={session.id}
-                  onClick={() => openSession(session.id)}
                   className={cn(
-                    "w-full rounded-2xl border border-border bg-background/70 p-3 text-left transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50",
+                    "group flex w-full items-start gap-2 rounded-2xl border border-border bg-background/70 p-3 text-left transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50",
                     activeSessionId === session.id && "border-[#5B7CFF] bg-[#5B7CFF]/10"
                   )}
                 >
-                  <div className="line-clamp-2 text-sm font-semibold">{session.title}</div>
-                  <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    {new Date(session.updated_at).toLocaleString()}
-                  </div>
-                </button>
+                  <button className="min-w-0 flex-1 text-left" onClick={() => openSession(session.id)}>
+                    <div className="line-clamp-2 text-sm font-semibold">{session.title}</div>
+                    <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                      <Clock3 className="h-3.5 w-3.5" />
+                      {new Date(session.updated_at).toLocaleString()}
+                    </div>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-muted-foreground opacity-70 transition hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                    disabled={deletingSessionId === session.id}
+                    onClick={() => deleteSession(session.id)}
+                    aria-label="删除会话"
+                    title="删除会话"
+                  >
+                    {deletingSessionId === session.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </Button>
+                </div>
               ))
             )}
           </div>

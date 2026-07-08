@@ -19,6 +19,8 @@ PRESET_SIZES = {
     "1:1": {"1k": "1024x1024", "2k": "2560x2560", "4k": "3840x3840"},
     "9:16": {"1k": "1024x1920", "2k": "1440x2560", "4k": "2160x3840"},
 }
+GORK_ASPECT_RATIOS = {"16:9", "1:1", "9:16"}
+GORK_RESOLUTIONS = {"1k", "2k"}
 
 
 def validate_image2_size(size: str) -> str:
@@ -43,12 +45,20 @@ def validate_image2_size(size: str) -> str:
     return f"{width}x{height}"
 
 
-def resolve_size(payload: ImageRequest) -> str:
+def resolve_openai_size(payload: ImageRequest) -> str:
     if payload.aspect_ratio != "custom" and payload.quality != "custom":
         expected = PRESET_SIZES.get(payload.aspect_ratio, {}).get(payload.quality)
         if expected and payload.size != expected:
             raise HTTPException(status_code=422, detail=f"当前比例和清晰度对应的分辨率应为 {expected}。")
     return validate_image2_size(payload.size)
+
+
+def resolve_gork_size(payload: ImageRequest) -> str:
+    if payload.aspect_ratio not in GORK_ASPECT_RATIOS:
+        raise HTTPException(status_code=422, detail="Gork 生图只支持 16:9、1:1、9:16。")
+    if payload.quality not in GORK_RESOLUTIONS:
+        raise HTTPException(status_code=422, detail="Gork 生图只支持 1k 或 2k，不支持 4k 或自定义分辨率。")
+    return f"{payload.aspect_ratio} {payload.quality}"
 
 
 @router.get("/images", response_model=list[ImageRecordOut])
@@ -62,10 +72,12 @@ def image(
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ImageResponse:
-    resolved_size = resolve_size(payload)
-    payload.size = resolved_size
+    resolved_size = resolve_gork_size(payload) if payload.provider == "gork" else resolve_openai_size(payload)
+    if payload.provider == "openai":
+        payload.size = resolved_size
+
     try:
-        service = OpenAIService()
+        service = OpenAIService(provider=payload.provider)
         image_base64 = service.generate_image(payload)
         db.add(
             ImageRecord(
@@ -81,6 +93,8 @@ def image(
     except OpenAIServiceError as exc:
         db.rollback()
         message = str(exc)
-        if "size" in message.lower() and "gpt-image-1" in message.lower():
+        if payload.provider == "gork" and "400" in message:
+            message = "Gork 生图请求被上游拒绝。请确认后台 Gork 生图模型为 grok-imagine-image-quality，并且前端只选择 1k 或 2k。"
+        elif "size" in message.lower() and "gpt-image-1" in message.lower():
             message = "当前生图模型不支持该分辨率。请在后台将生图模型切换为支持自定义尺寸的 gpt-image-2，或选择该模型支持的尺寸。"
         raise HTTPException(status_code=502, detail=message) from exc

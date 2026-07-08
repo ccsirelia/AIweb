@@ -1,10 +1,12 @@
+import base64
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 
 from models.schemas import ImageRequest
-from services.settings_service import get_openai_model_config, get_openai_runtime_config
+from services.settings_service import get_model_config, get_runtime_config, normalize_provider
 
 load_dotenv()
 
@@ -49,12 +51,13 @@ STYLE_PROMPTS = {
 
 
 class OpenAIService:
-    def __init__(self) -> None:
-        base_url, api_key = get_openai_runtime_config()
+    def __init__(self, provider: str = "openai") -> None:
+        self.provider = normalize_provider(provider)
+        base_url, api_key = get_runtime_config(self.provider)
         if not api_key:
-            raise OpenAIServiceError("OPENAI_API_KEY is not configured")
+            raise OpenAIServiceError(f"{self.provider.upper()} API key is not configured")
         self.client = OpenAI(api_key=api_key, base_url=base_url)
-        self.text_model, self.image_model = get_openai_model_config()
+        self.text_model, self.image_model = get_model_config(self.provider)
 
     def _extract_responses_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)
@@ -171,19 +174,50 @@ class OpenAIService:
             except OpenAIError as exc:
                 raise OpenAIServiceError(str(exc)) from exc
 
+    def _extract_image_base64(self, result: Any) -> str:
+        if not getattr(result, "data", None):
+            raise OpenAIServiceError("Image API returned empty data")
+
+        first = result.data[0]
+        image_base64 = getattr(first, "b64_json", None)
+        if image_base64:
+            return image_base64
+
+        image_url = getattr(first, "url", None)
+        if image_url:
+            response = httpx.get(image_url, timeout=60)
+            response.raise_for_status()
+            return base64.b64encode(response.content).decode("ascii")
+
+        raise OpenAIServiceError("Image API returned no b64_json or url")
+
     def generate_image(self, payload: ImageRequest) -> str:
         style_direction = STYLE_PROMPTS.get(payload.style, STYLE_PROMPTS["写实"])
         final_prompt = f"{payload.prompt}\nStyle direction: {style_direction}"
         try:
-            result = self.client.images.generate(
-                model=self.image_model,
-                prompt=final_prompt,
-                size=payload.size,
-                n=1,
-            )
-            image_base64 = result.data[0].b64_json
+            if self.provider == "gork":
+                result = self.client.images.generate(
+                    model=self.image_model,
+                    prompt=final_prompt,
+                    n=1,
+                    extra_body={
+                        "aspect_ratio": payload.aspect_ratio,
+                        "resolution": payload.quality,
+                    },
+                )
+            else:
+                result = self.client.images.generate(
+                    model=self.image_model,
+                    prompt=final_prompt,
+                    size=payload.size,
+                    n=1,
+                )
+
+            image_base64 = self._extract_image_base64(result)
             if not image_base64:
                 raise OpenAIServiceError("OpenAI returned an empty image")
             return image_base64
         except OpenAIError as exc:
             raise OpenAIServiceError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise OpenAIServiceError(f"Image download failed: {exc}") from exc

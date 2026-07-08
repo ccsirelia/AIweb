@@ -1,5 +1,5 @@
 from html import escape
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from database.models import UserAccount
 from database.session import get_db
+from services.auth_service import hash_password
 from services.settings_service import (
+    SETTING_GORK_API_KEY,
+    SETTING_GORK_BASE_URL,
+    SETTING_GORK_IMAGE_MODEL,
+    SETTING_GORK_TEXT_MODEL,
     SETTING_OPENAI_API_KEY,
     SETTING_OPENAI_BASE_URL,
     SETTING_OPENAI_IMAGE_MODEL,
@@ -17,7 +22,6 @@ from services.settings_service import (
     mask_secret,
     set_setting,
 )
-from services.auth_service import hash_password
 
 router = APIRouter(tags=["admin"])
 
@@ -29,15 +33,60 @@ async def read_form(request: Request) -> dict[str, str]:
 
 
 def redirect_admin(message: str = "") -> RedirectResponse:
-    suffix = f"?message={message}" if message else ""
+    suffix = f"?message={quote(message)}" if message else ""
     return RedirectResponse(url=f"/admin{suffix}", status_code=303)
+
+
+def render_provider_card(
+    title: str,
+    description: str,
+    prefix: str,
+    base_url: str,
+    api_key: str,
+    text_model: str,
+    image_model: str,
+    base_placeholder: str,
+    text_placeholder: str,
+    image_placeholder: str,
+) -> str:
+    return f"""
+      <section class="card">
+        <div class="card-head">
+          <h2>{escape(title)}</h2>
+          <p>{escape(description)}</p>
+        </div>
+        <div class="card-body">
+          <form method="post" action="/admin/settings">
+            <input type="hidden" name="provider" value="{escape(prefix)}" />
+            <div class="field">
+              <label for="{prefix}_base_url">API 地址</label>
+              <input id="{prefix}_base_url" name="base_url" value="{escape(base_url)}" placeholder="{escape(base_placeholder)}" />
+              <div class="hint">填写 sub2 或兼容 OpenAI SDK 的 Base URL，一般只填到 /v1。</div>
+            </div>
+            <div class="field">
+              <label for="{prefix}_api_key">API Key</label>
+              <input id="{prefix}_api_key" name="api_key" type="password" placeholder="留空则不覆盖现有 Key" />
+              <div class="hint">当前状态：{escape(mask_secret(api_key))}</div>
+            </div>
+            <div class="field">
+              <label for="{prefix}_text_model">聊天模型</label>
+              <input id="{prefix}_text_model" name="text_model" value="{escape(text_model)}" placeholder="{escape(text_placeholder)}" />
+            </div>
+            <div class="field">
+              <label for="{prefix}_image_model">生图模型</label>
+              <input id="{prefix}_image_model" name="image_model" value="{escape(image_model)}" placeholder="{escape(image_placeholder)}" />
+            </div>
+            <button class="button" type="submit">保存 {escape(title)} 配置</button>
+          </form>
+        </div>
+      </section>
+    """
 
 
 def render_users(users: list[UserAccount]) -> str:
     if not users:
         return """
         <div class="empty">
-          <div class="empty-icon">◎</div>
           <h3>暂无用户</h3>
           <p>添加第一个成员后，这里会展示账号状态与角色。</p>
         </div>
@@ -94,13 +143,43 @@ def render_users(users: list[UserAccount]) -> str:
 
 @router.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    base_url = get_setting(db, SETTING_OPENAI_BASE_URL, "")
-    api_key = get_setting(db, SETTING_OPENAI_API_KEY, "")
-    text_model = get_setting(db, SETTING_OPENAI_TEXT_MODEL, "")
-    image_model = get_setting(db, SETTING_OPENAI_IMAGE_MODEL, "")
-    env_hint = "后台已配置" if api_key else "将回退到 .env 中的 OPENAI_API_KEY"
+    openai_base_url = get_setting(db, SETTING_OPENAI_BASE_URL, "")
+    openai_api_key = get_setting(db, SETTING_OPENAI_API_KEY, "")
+    openai_text_model = get_setting(db, SETTING_OPENAI_TEXT_MODEL, "")
+    openai_image_model = get_setting(db, SETTING_OPENAI_IMAGE_MODEL, "")
+
+    gork_base_url = get_setting(db, SETTING_GORK_BASE_URL, "")
+    gork_api_key = get_setting(db, SETTING_GORK_API_KEY, "")
+    gork_text_model = get_setting(db, SETTING_GORK_TEXT_MODEL, "")
+    gork_image_model = get_setting(db, SETTING_GORK_IMAGE_MODEL, "")
+
     users = db.query(UserAccount).order_by(desc(UserAccount.created_at)).all()
     message = request.query_params.get("message", "")
+
+    openai_card = render_provider_card(
+        "OpenAI",
+        "默认 OpenAI 或 OpenAI-compatible 通道配置。",
+        "openai",
+        openai_base_url,
+        openai_api_key,
+        openai_text_model,
+        openai_image_model,
+        "https://api.openai.com/v1",
+        "gpt-4.1-mini",
+        "gpt-image-1",
+    )
+    gork_card = render_provider_card(
+        "Gork",
+        "通过 sub2 中转的 Gork/Grok 兼容通道配置。前端选择 Gork 时会使用这里的 Key 和模型。",
+        "gork",
+        gork_base_url,
+        gork_api_key,
+        gork_text_model,
+        gork_image_model,
+        "https://你的-sub2-地址/v1",
+        "grok-3-mini 或 sub2 映射模型名",
+        "grok-2-image 或 sub2 映射模型名",
+    )
 
     html = f"""
     <!doctype html>
@@ -112,12 +191,11 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
       <style>
         :root {{
           --bg: #f6f7fb;
-          --card: rgba(255,255,255,.84);
+          --card: rgba(255,255,255,.86);
           --text: #1a1a1a;
           --muted: #808080;
           --line: #e3e7f0;
           --primary: #5b7cff;
-          --primary-hover: #466bff;
           --accent: #8a5cff;
           --danger: #ef4444;
           --shadow: 0 24px 80px rgba(15,17,23,.09);
@@ -133,61 +211,39 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             radial-gradient(circle at 88% 12%, rgba(138,92,255,.10), transparent 30rem),
             var(--bg);
         }}
-        a {{ color: inherit; text-decoration: none; }}
         .layout {{ display: grid; min-height: 100vh; grid-template-columns: 280px 1fr; }}
         .sidebar {{
-          position: sticky;
-          top: 0;
-          height: 100vh;
-          padding: 28px 22px;
-          border-right: 1px solid var(--line);
-          background: rgba(255,255,255,.56);
-          backdrop-filter: blur(24px);
+          position: sticky; top: 0; height: 100vh; padding: 28px 22px;
+          border-right: 1px solid var(--line); background: rgba(255,255,255,.58); backdrop-filter: blur(24px);
         }}
-        .brand {{ display: flex; align-items: center; gap: 12px; margin-bottom: 44px; }}
-        .logo {{
-          width: 44px; height: 44px; border-radius: 18px;
-          display: grid; place-items: center;
-          background: #1a1a1a; color: #fff; box-shadow: var(--shadow);
-        }}
+        .brand {{ display: flex; align-items: center; gap: 12px; margin-bottom: 42px; color: inherit; text-decoration: none; }}
+        .logo {{ width: 44px; height: 44px; border-radius: 16px; display: grid; place-items: center; background: #1a1a1a; color: #fff; }}
         .brand strong {{ display: block; font-size: 18px; }}
         .brand span {{ color: var(--muted); font-size: 12px; }}
         .nav {{ display: grid; gap: 10px; }}
-        .nav-item {{
-          display: flex; align-items: center; gap: 10px;
-          height: 46px; padding: 0 14px; border-radius: 16px;
-          color: #4b5563; font-weight: 650; font-size: 14px;
+        .nav a {{
+          display: flex; align-items: center; height: 46px; padding: 0 14px; border-radius: 16px;
+          color: #4b5563; font-weight: 700; font-size: 14px; text-decoration: none;
         }}
-        .nav-item.active {{
-          color: #fff;
-          background: linear-gradient(135deg, var(--primary), var(--accent));
-          box-shadow: 0 16px 40px rgba(91,124,255,.25);
-        }}
+        .nav a.active {{ color: #fff; background: linear-gradient(135deg, var(--primary), var(--accent)); }}
         .safe-box {{
-          position: absolute; left: 22px; right: 22px; bottom: 24px;
-          padding: 16px; border: 1px solid var(--line); border-radius: 20px;
-          background: rgba(246,247,251,.72);
+          position: absolute; left: 22px; right: 22px; bottom: 24px; padding: 16px;
+          border: 1px solid var(--line); border-radius: 20px; background: rgba(246,247,251,.72);
         }}
-        .safe-box strong {{ font-size: 14px; }}
         .safe-box p {{ margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }}
         main {{ padding: 28px 36px 48px; min-width: 0; }}
         .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }}
         .eyebrow {{ margin: 0 0 6px; font-size: 12px; letter-spacing: .22em; font-weight: 800; color: #4b5563; }}
-        h1 {{ margin: 0; font-size: 32px; letter-spacing: 0; }}
+        h1 {{ margin: 0; font-size: 32px; }}
         .badge {{
           display: inline-flex; align-items: center; height: 38px; padding: 0 14px;
           border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.66);
-          color: #4b5563; font-size: 13px; font-weight: 650;
+          color: #4b5563; font-size: 13px; font-weight: 700;
         }}
-        .grid {{ display: grid; grid-template-columns: minmax(360px, .78fr) 1.22fr; gap: 22px; align-items: start; }}
+        .grid {{ display: grid; grid-template-columns: repeat(2, minmax(320px, 1fr)); gap: 22px; align-items: start; }}
         .card {{
-          border: 1px solid var(--line);
-          border-radius: 28px;
-          background: var(--card);
-          box-shadow: var(--shadow);
-          backdrop-filter: blur(24px);
-          overflow: hidden;
-          animation: fade .35s ease-out both;
+          border: 1px solid var(--line); border-radius: 28px; background: var(--card);
+          box-shadow: var(--shadow); backdrop-filter: blur(24px); overflow: hidden;
         }}
         .card-head {{ padding: 22px 24px 0; }}
         .card-head h2 {{ margin: 0; font-size: 19px; }}
@@ -195,41 +251,29 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         .card-body {{ padding: 22px 24px 24px; }}
         label {{ display: block; margin-bottom: 8px; font-size: 13px; font-weight: 700; }}
         input, select {{
-          width: 100%;
-          height: 46px;
-          border: 1px solid var(--line);
-          border-radius: 16px;
-          padding: 0 14px;
-          outline: none;
-          background: rgba(255,255,255,.78);
-          color: var(--text);
-          transition: border .2s, box-shadow .2s;
+          width: 100%; height: 46px; border: 1px solid var(--line); border-radius: 16px;
+          padding: 0 14px; outline: none; background: rgba(255,255,255,.78); color: var(--text);
         }}
         input:focus, select:focus {{ border-color: var(--primary); box-shadow: 0 0 0 4px rgba(91,124,255,.12); }}
         .field {{ margin-bottom: 16px; }}
         .hint {{ margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }}
         .button {{
-          display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-          width: 100%; height: 46px; border: 0; border-radius: 16px;
-          color: #fff; font-weight: 800; cursor: pointer;
+          display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 46px;
+          border: 0; border-radius: 16px; color: #fff; font-weight: 800; cursor: pointer;
           background: linear-gradient(135deg, var(--primary), var(--accent));
           box-shadow: 0 16px 38px rgba(91,124,255,.25);
-          transition: transform .18s, background .18s;
         }}
-        .button:hover {{ transform: translateY(-1px) scale(1.01); background: var(--primary-hover); }}
-        .stats {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 22px; }}
-        .stat {{ padding: 18px; border: 1px solid var(--line); border-radius: 22px; background: rgba(255,255,255,.68); }}
-        .stat span {{ color: var(--muted); font-size: 12px; }}
-        .stat strong {{ display: block; margin-top: 8px; font-size: 24px; }}
+        .message {{
+          margin-bottom: 16px; border: 1px solid rgba(91,124,255,.22); border-radius: 18px;
+          background: rgba(91,124,255,.08); padding: 12px 14px; color: #3854d8; font-size: 14px; font-weight: 700;
+        }}
+        .wide {{ grid-column: 1 / -1; }}
         .table-wrap {{ overflow-x: auto; }}
         table {{ width: 100%; border-collapse: collapse; }}
         th, td {{ padding: 15px 16px; border-bottom: 1px solid var(--line); text-align: left; font-size: 14px; }}
         th {{ color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }}
         .user-cell {{ display: flex; align-items: center; gap: 12px; }}
-        .avatar {{
-          width: 40px; height: 40px; border-radius: 16px; display: grid; place-items: center;
-          color: #fff; font-weight: 850; background: linear-gradient(135deg, var(--primary), var(--accent));
-        }}
+        .avatar {{ width: 40px; height: 40px; border-radius: 16px; display: grid; place-items: center; color: #fff; font-weight: 850; background: linear-gradient(135deg, var(--primary), var(--accent)); }}
         .user-cell span {{ display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }}
         .pill {{ display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }}
         .pill.ok {{ color: #047857; background: #d1fae5; }}
@@ -237,32 +281,15 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         .pill.role {{ color: #4f46e5; background: #eef2ff; }}
         .actions {{ display: flex; gap: 8px; align-items: center; }}
         .actions form {{ margin: 0; }}
-        .ghost, .danger {{
-          height: 34px; border-radius: 12px; padding: 0 12px; cursor: pointer;
-          border: 1px solid var(--line); background: #fff; font-weight: 750;
-        }}
+        .ghost, .danger {{ height: 34px; border-radius: 12px; padding: 0 12px; cursor: pointer; border: 1px solid var(--line); background: #fff; font-weight: 750; }}
         .danger {{ color: var(--danger); }}
-        .message {{
-          margin-bottom: 16px;
-          border: 1px solid rgba(91,124,255,.22);
-          border-radius: 18px;
-          background: rgba(91,124,255,.08);
-          padding: 12px 14px;
-          color: #3854d8;
-          font-size: 14px;
-          font-weight: 700;
-        }}
-        .empty {{ display: grid; place-items: center; min-height: 260px; text-align: center; color: var(--muted); }}
-        .empty-icon {{ width: 54px; height: 54px; display: grid; place-items: center; border-radius: 18px; margin-bottom: 12px; background: rgba(91,124,255,.1); color: var(--primary); font-size: 24px; }}
-        .empty h3 {{ margin: 0; color: var(--text); }}
-        .empty p {{ margin: 8px 0 0; font-size: 14px; }}
-        @keyframes fade {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+        .user-form-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr 160px; gap: 12px; }}
+        .empty {{ display: grid; place-items: center; min-height: 180px; text-align: center; color: var(--muted); }}
         @media (max-width: 980px) {{
-          .layout {{ grid-template-columns: 1fr; }}
+          .layout, .grid, .user-form-grid {{ grid-template-columns: 1fr; }}
           .sidebar {{ position: relative; height: auto; }}
           .safe-box {{ position: static; margin-top: 18px; }}
           main {{ padding: 22px 16px 36px; }}
-          .grid, .stats {{ grid-template-columns: 1fr; }}
           .topbar {{ align-items: flex-start; gap: 14px; flex-direction: column; }}
         }}
       </style>
@@ -271,18 +298,18 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
       <div class="layout">
         <aside class="sidebar">
           <a class="brand" href="/admin">
-            <div class="logo">✦</div>
+            <div class="logo">AI</div>
             <div><strong>AIWeb Admin</strong><span>Backend Console</span></div>
           </a>
           <nav class="nav">
-            <a class="nav-item active" href="/admin">⚙ API 配置</a>
-            <a class="nav-item" href="#users">👤 用户管理</a>
-            <a class="nav-item" href="/docs">⌁ API Docs</a>
-            <a class="nav-item" href="/api/health">◇ Health</a>
+            <a class="active" href="/admin">API 配置</a>
+            <a href="#users">用户管理</a>
+            <a href="/docs">API Docs</a>
+            <a href="/api/health">Health</a>
           </nav>
           <div class="safe-box">
             <strong>密钥安全</strong>
-            <p>API Key 只保存在后端 SQLite 或环境变量中，前端项目不会读取。</p>
+            <p>OpenAI 与 Gork API Key 都只保存在后端 SQLite 或环境变量中，前端不会读取。</p>
           </div>
         </aside>
 
@@ -292,61 +319,26 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
               <p class="eyebrow">AIWEB BACKEND</p>
               <h1>后端管理控制台</h1>
             </div>
-            <div class="badge">FastAPI · SQLite · OpenAI</div>
+            <div class="badge">FastAPI · SQLite · Multi Provider</div>
           </div>
 
           {f'<div class="message">{escape(message)}</div>' if message else ''}
 
-          <div class="stats">
-            <div class="stat"><span>API 地址</span><strong>{escape(base_url or "默认")}</strong></div>
-            <div class="stat"><span>API Key</span><strong>{escape(mask_secret(api_key))}</strong></div>
-            <div class="stat"><span>用户数</span><strong>{len(users)}</strong></div>
-          </div>
-
           <div class="grid">
-            <section class="card">
-              <div class="card-head">
-                <h2>OpenAI API 设置</h2>
-                <p>配置 OpenAI 或兼容服务的 Base URL 与 API Key。留空 API Key 时会使用环境变量。</p>
-              </div>
-              <div class="card-body">
-                <form method="post" action="/admin/settings">
-                  <div class="field">
-                    <label for="base_url">API 地址</label>
-                    <input id="base_url" name="base_url" value="{escape(base_url)}" placeholder="https://api.openai.com/v1" />
-                    <div class="hint">用于 OpenAI SDK 的 base_url，可填写兼容接口地址。</div>
-                  </div>
-                  <div class="field">
-                    <label for="api_key">API Key</label>
-                    <input id="api_key" name="api_key" type="password" placeholder="不修改则留空" />
-                    <div class="hint">当前状态：{escape(env_hint)}。提交空值不会覆盖已有 Key。</div>
-                  </div>
-                  <div class="field">
-                    <label for="text_model">文字模型</label>
-                    <input id="text_model" name="text_model" value="{escape(text_model)}" placeholder="例如：gpt-4o-mini 或你的账号支持的模型" />
-                    <div class="hint">留空时使用 .env 中的 OPENAI_TEXT_MODEL。</div>
-                  </div>
-                  <div class="field">
-                    <label for="image_model">生图模型</label>
-                    <input id="image_model" name="image_model" value="{escape(image_model)}" placeholder="例如：gpt-image-1" />
-                    <div class="hint">留空时使用 .env 中的 OPENAI_IMAGE_MODEL。</div>
-                  </div>
-                  <button class="button" type="submit">保存 API 设置</button>
-                </form>
-              </div>
-            </section>
+            {openai_card}
+            {gork_card}
 
-            <section class="card" id="users">
+            <section class="card wide" id="users">
               <div class="card-head">
                 <h2>用户管理</h2>
-                <p>添加、启用、禁用或删除后台用户记录。后续可以接入登录鉴权和权限控制。</p>
+                <p>添加、启用、禁用或删除后台用户记录。</p>
               </div>
               <div class="card-body">
                 <form method="post" action="/admin/users">
-                  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 160px; gap: 12px;">
+                  <div class="user-form-grid">
                     <div class="field">
                       <label for="name">姓名</label>
-                      <input id="name" name="name" required maxlength="120" placeholder="例如：Admin" />
+                      <input id="name" name="name" required maxlength="120" placeholder="Admin" />
                     </div>
                     <div class="field">
                       <label for="username">用户名</label>
@@ -386,17 +378,28 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @router.post("/admin/settings")
 async def update_settings(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
     data = await read_form(request)
+    provider = data.get("provider", "openai").strip().lower()
     base_url = data.get("base_url", "").strip()
     api_key = data.get("api_key", "").strip()
     text_model = data.get("text_model", "").strip()
     image_model = data.get("image_model", "").strip()
+
+    if provider == "gork":
+        set_setting(db, SETTING_GORK_BASE_URL, base_url)
+        set_setting(db, SETTING_GORK_TEXT_MODEL, text_model)
+        set_setting(db, SETTING_GORK_IMAGE_MODEL, image_model)
+        if api_key:
+            set_setting(db, SETTING_GORK_API_KEY, api_key)
+        db.commit()
+        return redirect_admin("Gork 配置已保存")
+
     set_setting(db, SETTING_OPENAI_BASE_URL, base_url)
     set_setting(db, SETTING_OPENAI_TEXT_MODEL, text_model)
     set_setting(db, SETTING_OPENAI_IMAGE_MODEL, image_model)
     if api_key:
         set_setting(db, SETTING_OPENAI_API_KEY, api_key)
     db.commit()
-    return redirect_admin("API 设置已保存")
+    return redirect_admin("OpenAI 配置已保存")
 
 
 @router.post("/admin/users")

@@ -52,6 +52,8 @@ export type AuthResponse = {
   user: User;
 };
 
+export type Provider = "openai" | "gork";
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 export function getAuthToken() {
@@ -125,17 +127,18 @@ export function getMe() {
   return request<User>("/api/auth/me");
 }
 
-export function sendChat(message: string, sessionId?: number | null) {
+export function sendChat(message: string, sessionId?: number | null, provider: Provider = "openai") {
   return request<{ text: string; session_id: number }>("/api/chat", {
     method: "POST",
-    body: JSON.stringify({ message, session_id: sessionId ?? null })
+    body: JSON.stringify({ message, session_id: sessionId ?? null, provider })
   });
 }
 
-export function createChatJob(message: string, sessionId?: number | null, files?: File[]) {
+export function createChatJob(message: string, sessionId?: number | null, files?: File[], provider: Provider = "openai") {
   if (files?.length) {
     const form = new FormData();
     form.append("message", message);
+    form.append("provider", provider);
     if (sessionId) form.append("session_id", String(sessionId));
     files.forEach((file) => form.append("files", file));
     return request<ChatJob>("/api/chat/jobs", {
@@ -146,7 +149,7 @@ export function createChatJob(message: string, sessionId?: number | null, files?
 
   return request<ChatJob>("/api/chat/jobs", {
     method: "POST",
-    body: JSON.stringify({ message, session_id: sessionId ?? null })
+    body: JSON.stringify({ message, session_id: sessionId ?? null, provider })
   });
 }
 
@@ -162,7 +165,13 @@ export function getChatSession(sessionId: number) {
   return request<{ session: ChatSession; messages: ChatMessage[] }>(`/api/chat/sessions/${sessionId}`);
 }
 
-export function generateImage(payload: { prompt: string; style: string; size: string; aspect_ratio?: string; quality?: string }) {
+export function deleteChatSession(sessionId: number) {
+  return request<{ status: string }>(`/api/chat/sessions/${sessionId}`, {
+    method: "DELETE"
+  });
+}
+
+export function generateImage(payload: { prompt: string; style: string; size: string; aspect_ratio?: string; quality?: string; provider?: Provider }) {
   return request<{ image_base64: string }>("/api/image", {
     method: "POST",
     body: JSON.stringify(payload)

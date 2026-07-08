@@ -6,7 +6,7 @@ import { Download, ImageIcon, Loader2, RefreshCcw, WandSparkles } from "lucide-r
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
-import { generateImage, getAuthToken, getRecentImages, type ImageRecord } from "@/lib/api";
+import { generateImage, getAuthToken, getRecentImages, type ImageRecord, type Provider } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,7 +15,12 @@ import { cn } from "@/lib/utils";
 
 const styles = ["写实", "动漫", "3D", "油画", "产品图", "摄影"];
 const aspectRatios = ["16:9", "1:1", "9:16"] as const;
-const qualities = ["1k", "2k", "4k"] as const;
+const openaiQualities = ["1k", "2k", "4k"] as const;
+const gorkQualities = ["1k", "2k"] as const;
+const providers: { label: string; value: Provider }[] = [
+  { label: "OpenAI", value: "openai" },
+  { label: "Gork", value: "gork" }
+];
 const presetSizes = {
   "16:9": { "1k": "1920x1024", "2k": "2560x1440", "4k": "3840x2160" },
   "1:1": { "1k": "1024x1024", "2k": "2560x2560", "4k": "3840x3840" },
@@ -24,6 +29,8 @@ const presetSizes = {
 
 type AspectRatio = keyof typeof presetSizes;
 type Quality = keyof (typeof presetSizes)["1:1"];
+
+const IMAGE_PROVIDER_KEY = "aiweb_image_provider";
 
 function validateImage2Size(width: number, height: number) {
   if (!Number.isInteger(width) || !Number.isInteger(height)) return "宽高必须是整数。";
@@ -39,6 +46,7 @@ function validateImage2Size(width: number, height: number) {
 export function ImageStudio() {
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("写实");
+  const [provider, setProvider] = useState<Provider>("openai");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("1:1");
   const [quality, setQuality] = useState<Quality>("1k");
   const [customSizeEnabled, setCustomSizeEnabled] = useState(false);
@@ -49,21 +57,41 @@ export function ImageStudio() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
   const router = useRouter();
+  const isGork = provider === "gork";
+  const visibleQualities = isGork ? gorkQualities : openaiQualities;
 
   const size = useMemo(() => {
+    if (isGork) return `${aspectRatio} ${quality === "4k" ? "2k" : quality}`;
     if (customSizeEnabled) return `${customWidth}x${customHeight}`;
     return presetSizes[aspectRatio][quality];
-  }, [aspectRatio, customHeight, customSizeEnabled, customWidth, quality]);
+  }, [aspectRatio, customHeight, customSizeEnabled, customWidth, isGork, quality]);
 
-  const customSizeError = customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
+  const customSizeError = !isGork && customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
 
   useEffect(() => {
     if (!getAuthToken()) {
       router.push("/login");
       return;
     }
+    const storedProvider = localStorage.getItem(IMAGE_PROVIDER_KEY);
+    if (storedProvider === "openai" || storedProvider === "gork") {
+      setProvider(storedProvider);
+      if (storedProvider === "gork") {
+        setQuality((value) => (value === "4k" ? "2k" : value));
+        setCustomSizeEnabled(false);
+      }
+    }
     refreshImages();
   }, [router]);
+
+  function changeProvider(value: Provider) {
+    setProvider(value);
+    localStorage.setItem(IMAGE_PROVIDER_KEY, value);
+    if (value === "gork") {
+      setQuality((current) => (current === "4k" ? "2k" : current));
+      setCustomSizeEnabled(false);
+    }
+  }
 
   async function refreshImages() {
     setHistoryLoading(true);
@@ -92,14 +120,16 @@ export function ImageStudio() {
       return;
     }
 
+    const nextQuality = isGork && quality === "4k" ? "2k" : quality;
     setLoading(true);
     try {
       const result = await generateImage({
         prompt: trimmed,
         style,
-        size,
-        aspect_ratio: customSizeEnabled ? "custom" : aspectRatio,
-        quality: customSizeEnabled ? "custom" : quality
+        size: isGork ? presetSizes[aspectRatio][nextQuality] : size,
+        aspect_ratio: isGork ? aspectRatio : customSizeEnabled ? "custom" : aspectRatio,
+        quality: isGork ? nextQuality : customSizeEnabled ? "custom" : quality,
+        provider
       });
       setImage(result.image_base64);
       await refreshImages();
@@ -122,8 +152,17 @@ export function ImageStudio() {
     setImage(record.image_base64);
     setPrompt(record.prompt);
     setStyle(styles.includes(record.style) ? record.style : "写实");
+    const gorkMatch = record.size.match(/^(16:9|1:1|9:16)\s+(1k|2k)$/);
+    if (gorkMatch) {
+      setProvider("gork");
+      setAspectRatio(gorkMatch[1] as AspectRatio);
+      setQuality(gorkMatch[2] as Quality);
+      setCustomSizeEnabled(false);
+      return;
+    }
+
     const [width, height] = record.size.split("x").map(Number);
-    const preset = aspectRatios.flatMap((ratio) => qualities.map((item) => ({ ratio, quality: item, size: presetSizes[ratio][item] }))).find((item) => item.size === record.size);
+    const preset = aspectRatios.flatMap((ratio) => openaiQualities.map((item) => ({ ratio, quality: item, size: presetSizes[ratio][item] }))).find((item) => item.size === record.size);
     if (preset) {
       setCustomSizeEnabled(false);
       setAspectRatio(preset.ratio);
@@ -145,7 +184,25 @@ export function ImageStudio() {
             </div>
             <div>
               <h2 className="text-lg font-semibold">AI Image Studio</h2>
-              <p className="text-sm text-muted-foreground">生成商业级视觉草图。</p>
+              <p className="text-sm text-muted-foreground">选择通道生成商业级视觉草图。</p>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <label className="text-sm font-medium">模型通道</label>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {providers.map((item) => (
+                <button
+                  key={item.value}
+                  onClick={() => changeProvider(item.value)}
+                  className={cn(
+                    "h-10 rounded-xl border text-sm font-semibold transition hover:scale-[1.02]",
+                    provider === item.value ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -183,43 +240,29 @@ export function ImageStudio() {
             <div>
               <div className="flex items-center justify-between gap-3">
                 <label className="text-sm font-medium">比例</label>
-                <button className="text-xs text-[#5B7CFF] transition hover:text-[#466BFF]" onClick={() => setCustomSizeEnabled((value) => !value)}>
-                  {customSizeEnabled ? "使用预设" : "自定义分辨率"}
-                </button>
+                {!isGork && (
+                  <button className="text-xs text-[#5B7CFF] transition hover:text-[#466BFF]" onClick={() => setCustomSizeEnabled((value) => !value)}>
+                    {customSizeEnabled ? "使用预设" : "自定义分辨率"}
+                  </button>
+                )}
               </div>
-              {!customSizeEnabled ? (
-                <>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {aspectRatios.map((item) => (
-                      <button
-                        key={item}
-                        onClick={() => setAspectRatio(item)}
-                        className={cn(
-                          "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
-                          aspectRatio === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
-                        )}
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    {qualities.map((item) => (
-                      <button
-                        key={item}
-                        onClick={() => setQuality(item)}
-                        className={cn(
-                          "h-10 rounded-xl border text-sm uppercase transition hover:scale-[1.02]",
-                          quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
-                        )}
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {aspectRatios.map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setAspectRatio(item)}
+                    className={cn(
+                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
+                      aspectRatio === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                    )}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+
+              {!isGork && customSizeEnabled ? (
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <input
                     value={customWidth}
                     min={512}
@@ -241,16 +284,32 @@ export function ImageStudio() {
                     aria-label="自定义高度"
                   />
                 </div>
+              ) : (
+                <div className={cn("mt-3 grid gap-2", isGork ? "grid-cols-2" : "grid-cols-3")}>
+                  {visibleQualities.map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => setQuality(item)}
+                      className={cn(
+                        "h-10 rounded-xl border text-sm uppercase transition hover:scale-[1.02]",
+                        quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                      )}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
               )}
+
               <div className={cn("mt-2 rounded-xl border px-3 py-2 text-xs", customSizeError ? "border-red-500/40 bg-red-500/10 text-red-600" : "border-border bg-background/70 text-muted-foreground")}>
-                当前尺寸：{size}
+                {isGork ? `Gork 输出：${aspectRatio} · ${quality === "4k" ? "2k" : quality}` : `当前尺寸：${size}`}
                 {customSizeError ? ` · ${customSizeError}` : ""}
               </div>
             </div>
 
             <Button className="w-full" disabled={loading || !prompt.trim() || Boolean(customSizeError)} onClick={() => createImage()}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              生成图片
+              通过 {isGork ? "Gork" : "OpenAI"} 生成图片
             </Button>
           </div>
         </Card>
@@ -274,7 +333,9 @@ export function ImageStudio() {
                   <ImageIcon className="h-6 w-6" />
                 </div>
                 <h3 className="mt-5 text-xl font-semibold">等待生成第一张作品</h3>
-                <p className="mt-2 text-sm text-muted-foreground">选择风格、比例和清晰度，然后让 Prompt 变成画面。</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {isGork ? "Gork 模式仅支持比例和 1k/2k。" : "OpenAI 模式支持预设分辨率和自定义分辨率。"}
+                </p>
               </div>
             )}
           </div>

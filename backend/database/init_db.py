@@ -45,6 +45,11 @@ def migrate_sqlite_schema() -> None:
         _run_sql("ALTER TABLE image_records ADD COLUMN user_id INTEGER")
         _run_sql("CREATE INDEX IF NOT EXISTS ix_image_records_user_id ON image_records (user_id)")
 
+    job_columns = _columns("chat_jobs")
+    if "provider" not in job_columns:
+        _run_sql("ALTER TABLE chat_jobs ADD COLUMN provider VARCHAR(40) NOT NULL DEFAULT 'openai'")
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_jobs_provider ON chat_jobs (provider)")
+
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)

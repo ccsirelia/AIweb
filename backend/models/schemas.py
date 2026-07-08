@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+Provider = Literal["openai", "gork"]
 ImageStyle = Literal["写实", "动漫", "3D", "油画", "产品图", "摄影"]
 ImageAspectRatio = Literal["16:9", "1:1", "9:16", "custom"]
 ImageQuality = Literal["1k", "2k", "4k", "custom"]
@@ -41,6 +42,7 @@ class AuthResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     session_id: int | None = None
+    provider: Provider = "openai"
 
 
 class ChatResponse(BaseModel):
@@ -66,6 +68,7 @@ class ImageRequest(BaseModel):
     size: str = Field("1024x1024", min_length=7, max_length=20, pattern=r"^\d{2,5}x\d{2,5}$")
     aspect_ratio: ImageAspectRatio = "1:1"
     quality: ImageQuality = "1k"
+    provider: Provider = "openai"
 
 
 class ImageResponse(BaseModel):

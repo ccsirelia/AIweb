@@ -13,6 +13,7 @@ from models.schemas import ChatJobOut, ChatRequest, ChatResponse, ChatSessionDet
 from services.auth_service import current_user
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
+from services.settings_service import normalize_provider
 
 router = APIRouter(prefix="/api", tags=["chat"])
 rate_limiter = InMemoryRateLimiter()
@@ -69,7 +70,7 @@ TEXT_EXTENSIONS = {
 
 def make_session_title(message: str) -> str:
     title = " ".join(message.strip().split())
-    return title[:42] or "新的对话"
+    return title[:42] or "New chat"
 
 
 def safe_filename(filename: str) -> str:
@@ -111,18 +112,19 @@ def attachment_payloads(db: Session, message_id: int) -> list[dict[str, str | in
     return payloads
 
 
-async def parse_chat_job_request(request: Request) -> tuple[str, int | None, list[UploadFile]]:
+async def parse_chat_job_request(request: Request) -> tuple[str, int | None, str, list[UploadFile]]:
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         message = str(form.get("message") or "").strip()
         raw_session_id = str(form.get("session_id") or "").strip()
+        provider = normalize_provider(str(form.get("provider") or "openai"))
         files = [value for key, value in form.multi_items() if key == "files" and isinstance(value, UploadFile)]
         session_id = int(raw_session_id) if raw_session_id.isdigit() else None
-        return message, session_id, files
+        return message, session_id, provider, files
 
     payload = ChatRequest.model_validate(await request.json())
-    return payload.message.strip(), payload.session_id, []
+    return payload.message.strip(), payload.session_id, normalize_provider(payload.provider), []
 
 
 async def save_attachments(
@@ -133,7 +135,7 @@ async def save_attachments(
     message_id: int,
 ) -> list[str]:
     if len(files) > MAX_FILES:
-        raise HTTPException(status_code=400, detail=f"一次最多上传 {MAX_FILES} 个附件。")
+        raise HTTPException(status_code=400, detail=f"Upload at most {MAX_FILES} files at once.")
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     names: list[str] = []
@@ -141,11 +143,11 @@ async def save_attachments(
         filename = safe_filename(upload.filename or "attachment")
         ext = Path(filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"不支持的附件格式：{filename}")
+            raise HTTPException(status_code=400, detail=f"Unsupported attachment type: {filename}")
 
         data = await upload.read()
         if len(data) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail=f"附件超过 20MB：{filename}")
+            raise HTTPException(status_code=400, detail=f"Attachment exceeds 20MB: {filename}")
 
         stored_name = f"{user_id}_{message_id}_{uuid.uuid4().hex}_{filename}"
         stored_path = UPLOAD_DIR / stored_name
@@ -180,7 +182,7 @@ def run_chat_job(job_id: int) -> None:
         session = db.get(ChatSession, job.session_id)
         if user_message is None or session is None:
             job.status = "failed"
-            job.error = "会话消息不存在。"
+            job.error = "Chat message not found."
             job.completed_at = now_utc()
             db.commit()
             return
@@ -194,7 +196,7 @@ def run_chat_job(job_id: int) -> None:
         )
         history = [{"role": item.role, "content": item.content} for item in previous_messages if item.role in {"user", "assistant"}]
 
-        service = OpenAIService()
+        service = OpenAIService(provider=job.provider)
         text = service.chat(user_message.content, history=history, attachments=attachment_payloads(db, user_message.id))
         db.add(ChatMessage(session_id=job.session_id, role="assistant", content=text))
         db.add(ChatRecord(user_id=job.user_id, user_message=user_message.content, ai_response=text))
@@ -227,16 +229,41 @@ def chat_session(
 ) -> ChatSessionDetail:
     session = db.get(ChatSession, session_id)
     if session is None or session.user_id != user.id:
-        raise HTTPException(status_code=404, detail="会话不存在。")
+        raise HTTPException(status_code=404, detail="Chat session not found.")
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at).all()
     return ChatSessionDetail(session=session, messages=messages)
+
+
+@router.delete("/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> dict[str, str]:
+    session = db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    attachments = db.query(ChatAttachment).filter(ChatAttachment.session_id == session_id, ChatAttachment.user_id == user.id).all()
+    for attachment in attachments:
+        try:
+            Path(attachment.file_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    db.query(ChatAttachment).filter(ChatAttachment.session_id == session_id, ChatAttachment.user_id == user.id).delete(synchronize_session=False)
+    db.query(ChatJob).filter(ChatJob.session_id == session_id, ChatJob.user_id == user.id).delete(synchronize_session=False)
+    db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete(synchronize_session=False)
+    db.delete(session)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/chat/jobs/{job_id}", response_model=ChatJobOut)
 def chat_job(job_id: int, db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> ChatJobOut:
     job = db.get(ChatJob, job_id)
     if job is None or job.user_id != user.id:
-        raise HTTPException(status_code=404, detail="任务不存在。")
+        raise HTTPException(status_code=404, detail="Chat job not found.")
     return job
 
 
@@ -247,15 +274,15 @@ async def create_chat_job(
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ChatJobOut:
-    user_message, session_id, files = await parse_chat_job_request(request)
+    user_message, session_id, provider, files = await parse_chat_job_request(request)
     if not user_message:
-        raise HTTPException(status_code=422, detail="请输入对话内容。")
+        raise HTTPException(status_code=422, detail="Please enter a message.")
     if len(user_message) > 4000:
-        raise HTTPException(status_code=422, detail="输入不能超过 4000 个字符。")
+        raise HTTPException(status_code=422, detail="Input cannot exceed 4000 characters.")
 
     session = db.get(ChatSession, session_id) if session_id else None
     if session is not None and session.user_id != user.id:
-        raise HTTPException(status_code=404, detail="会话不存在。")
+        raise HTTPException(status_code=404, detail="Chat session not found.")
     if session is None:
         session = ChatSession(title=make_session_title(user_message), user_id=user.id)
         db.add(session)
@@ -268,9 +295,9 @@ async def create_chat_job(
 
     attachment_names = await save_attachments(files, db, user.id, session.id, message.id)
     if attachment_names:
-        message.content = f"{user_message}\n\n附件：{', '.join(attachment_names)}"
+        message.content = f"{user_message}\n\nAttachments: {', '.join(attachment_names)}"
 
-    job = ChatJob(user_id=user.id, session_id=session.id, user_message_id=message.id, status="pending")
+    job = ChatJob(user_id=user.id, session_id=session.id, user_message_id=message.id, provider=provider, status="pending")
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -287,7 +314,7 @@ def chat(
     user_message = payload.message.strip()
     session = db.get(ChatSession, payload.session_id) if payload.session_id else None
     if session is not None and session.user_id != user.id:
-        raise HTTPException(status_code=404, detail="会话不存在。")
+        raise HTTPException(status_code=404, detail="Chat session not found.")
     if session is None:
         session = ChatSession(title=make_session_title(user_message), user_id=user.id)
         db.add(session)
@@ -303,7 +330,7 @@ def chat(
     history = [{"role": item.role, "content": item.content} for item in previous_messages if item.role in {"user", "assistant"}]
 
     try:
-        service = OpenAIService()
+        service = OpenAIService(provider=payload.provider)
         text = service.chat(user_message, history=history)
         db.add(ChatMessage(session_id=session.id, role="user", content=user_message))
         db.add(ChatMessage(session_id=session.id, role="assistant", content=text))
