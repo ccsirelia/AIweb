@@ -52,9 +52,22 @@ export type AuthResponse = {
   user: User;
 };
 
+export type TokenUsageSummary = {
+  total_tokens: number;
+  last_7_days_tokens: number;
+  last_24_hours_tokens: number;
+};
+
+export type AccountProfile = {
+  user: User;
+  created_at: string;
+  token_usage: TokenUsageSummary;
+  recent_images: ImageRecord[];
+};
+
 export type Provider = "openai" | "gork";
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8008").replace(/\/$/, "");
 
 export function getAuthToken() {
   if (typeof window === "undefined") return "";
@@ -98,7 +111,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const payload = await response.clone().json().catch(() => null);
     if (payload?.detail) {
-      const detail = Array.isArray(payload.detail) ? payload.detail.map((item: { msg?: string }) => item.msg).join("；") : payload.detail;
+      const detail = Array.isArray(payload.detail)
+        ? payload.detail.map((item: { msg?: string }) => item.msg ?? "请求参数错误").join("；")
+        : payload.detail;
       throw new Error(detail);
     }
 
@@ -125,6 +140,10 @@ export function register(payload: { username: string; name: string; email: strin
 
 export function getMe() {
   return request<User>("/api/auth/me");
+}
+
+export function getAccountProfile() {
+  return request<AccountProfile>("/api/account/profile");
 }
 
 export function sendChat(message: string, sessionId?: number | null, provider: Provider = "openai") {

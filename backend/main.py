@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database.init_db import init_db
-from routes import admin, auth, chat, history, image
+from routes import account, admin, auth, chat, history, image
 
 load_dotenv()
 
@@ -19,6 +19,7 @@ frontend_origins = [
     ).split(",")
     if origin.strip()
 ]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=frontend_origins,
@@ -39,8 +40,9 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(auth.router)
+app.include_router(account.router)
 app.include_router(chat.router)
 app.include_router(image.router)
 app.include_router(history.router)
 app.include_router(admin.router)
-app.include_router(auth.router)

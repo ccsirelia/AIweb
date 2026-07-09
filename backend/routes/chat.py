@@ -14,6 +14,7 @@ from services.auth_service import current_user
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
 from services.settings_service import normalize_provider
+from services.token_usage_service import record_token_usage
 
 router = APIRouter(prefix="/api", tags=["chat"])
 rate_limiter = InMemoryRateLimiter()
@@ -197,9 +198,20 @@ def run_chat_job(job_id: int) -> None:
         history = [{"role": item.role, "content": item.content} for item in previous_messages if item.role in {"user", "assistant"}]
 
         service = OpenAIService(provider=job.provider)
-        text = service.chat(user_message.content, history=history, attachments=attachment_payloads(db, user_message.id))
+        result = service.chat(user_message.content, history=history, attachments=attachment_payloads(db, user_message.id))
+        text = str(result["text"])
         db.add(ChatMessage(session_id=job.session_id, role="assistant", content=text))
         db.add(ChatRecord(user_id=job.user_id, user_message=user_message.content, ai_response=text))
+        record_token_usage(
+            db,
+            user_id=job.user_id,
+            source="chat",
+            provider=job.provider,
+            model=str(result.get("model") or service.text_model),
+            prompt_tokens=int(result.get("prompt_tokens") or 0),
+            completion_tokens=int(result.get("completion_tokens") or 0),
+            total_tokens=int(result.get("total_tokens") or 0),
+        )
         session.updated_at = now_utc()
         job.status = "completed"
         job.completed_at = now_utc()
@@ -331,10 +343,21 @@ def chat(
 
     try:
         service = OpenAIService(provider=payload.provider)
-        text = service.chat(user_message, history=history)
+        result = service.chat(user_message, history=history)
+        text = str(result["text"])
         db.add(ChatMessage(session_id=session.id, role="user", content=user_message))
         db.add(ChatMessage(session_id=session.id, role="assistant", content=text))
         db.add(ChatRecord(user_id=user.id, user_message=user_message, ai_response=text))
+        record_token_usage(
+            db,
+            user_id=user.id,
+            source="chat",
+            provider=payload.provider,
+            model=str(result.get("model") or service.text_model),
+            prompt_tokens=int(result.get("prompt_tokens") or 0),
+            completion_tokens=int(result.get("completion_tokens") or 0),
+            total_tokens=int(result.get("total_tokens") or 0),
+        )
         session.updated_at = now_utc()
         db.commit()
         return ChatResponse(text=text, session_id=session.id)

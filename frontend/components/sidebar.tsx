@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { History, ImageIcon, LayoutDashboard, LogIn, LogOut, MessageSquareText, Settings, Sparkles } from "lucide-react";
+import { History, ImageIcon, LayoutDashboard, LogIn, LogOut, MessageSquareText, Settings, Sparkles, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { clearAuthSession, getStoredUser, type User } from "@/lib/api";
@@ -66,8 +66,15 @@ export function Sidebar() {
       <div className="mt-auto hidden rounded-2xl border border-border bg-background/70 p-4 lg:block">
         {user ? (
           <>
-            <div className="text-sm font-semibold">{user.name}</div>
-            <p className="mt-1 text-xs text-muted-foreground">@{user.username}</p>
+            <Link href="/account" className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-black/[0.04] dark:hover:bg-white/[0.06]">
+              <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
+                <UserRound className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">{user.name}</div>
+                <p className="mt-1 truncate text-xs text-muted-foreground">@{user.username}</p>
+              </div>
+            </Link>
             <button onClick={logout} className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-medium">
               <LogOut className="h-4 w-4" />
               退出登录

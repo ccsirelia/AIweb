@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 Provider = Literal["openai", "gork"]
-ImageStyle = Literal["写实", "动漫", "3D", "油画", "产品图", "摄影"]
+ImageStyle = Literal["\u5199\u5b9e", "\u52a8\u6f2b", "3D", "\u6cb9\u753b", "\u4ea7\u54c1\u56fe", "\u6444\u5f71"]
 ImageAspectRatio = Literal["16:9", "1:1", "9:16", "custom"]
 ImageQuality = Literal["1k", "2k", "4k", "custom"]
 
@@ -64,7 +64,7 @@ class ChatJobOut(BaseModel):
 
 class ImageRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=1200)
-    style: ImageStyle = "写实"
+    style: ImageStyle = "\u5199\u5b9e"
     size: str = Field("1024x1024", min_length=7, max_length=20, pattern=r"^\d{2,5}x\d{2,5}$")
     aspect_ratio: ImageAspectRatio = "1:1"
     quality: ImageQuality = "1k"
@@ -126,3 +126,16 @@ class ImageRecordOut(BaseModel):
 class HistoryResponse(BaseModel):
     chats: list[ChatRecordOut]
     images: list[ImageRecordOut]
+
+
+class TokenUsageSummary(BaseModel):
+    total_tokens: int
+    last_7_days_tokens: int
+    last_24_hours_tokens: int
+
+
+class AccountProfileResponse(BaseModel):
+    user: UserOut
+    created_at: datetime
+    token_usage: TokenUsageSummary
+    recent_images: list[ImageRecordOut]

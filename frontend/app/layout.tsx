@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserAccountButton } from "@/components/user-account-button";
 
 import "./globals.css";
 
@@ -29,14 +30,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     AIWeb Studio
                   </p>
                   <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">
-                    创作控制台
+                    Creation Console
                   </h1>
                 </div>
                 <div className="flex items-center gap-3">
                   <ThemeToggle />
-                  <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#5B7CFF] to-[#8A5CFF] text-sm font-semibold text-white shadow-lg shadow-blue-500/20">
-                    A
-                  </div>
+                  <UserAccountButton />
                 </div>
               </div>
               <div className="mx-auto max-w-7xl">{children}</div>

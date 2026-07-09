@@ -43,6 +43,13 @@ function validateImage2Size(width: number, height: number) {
   return "";
 }
 
+function downloadBase64(imageBase64: string, name = `aiweb-image-${Date.now()}.png`) {
+  const link = document.createElement("a");
+  link.href = `data:image/png;base64,${imageBase64}`;
+  link.download = name;
+  link.click();
+}
+
 export function ImageStudio() {
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("写实");
@@ -57,15 +64,14 @@ export function ImageStudio() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
   const router = useRouter();
+
   const isGork = provider === "gork";
   const visibleQualities = isGork ? gorkQualities : openaiQualities;
-
   const size = useMemo(() => {
     if (isGork) return `${aspectRatio} ${quality === "4k" ? "2k" : quality}`;
     if (customSizeEnabled) return `${customWidth}x${customHeight}`;
     return presetSizes[aspectRatio][quality];
   }, [aspectRatio, customHeight, customSizeEnabled, customWidth, isGork, quality]);
-
   const customSizeError = !isGork && customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
 
   useEffect(() => {
@@ -98,9 +104,7 @@ export function ImageStudio() {
     try {
       const records = await getRecentImages();
       setRecentImages(records);
-      if (!image && records[0]) {
-        setImage(records[0].image_base64);
-      }
+      if (!image && records[0]) setImage(records[0].image_base64);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片历史加载失败。");
     } finally {
@@ -141,13 +145,6 @@ export function ImageStudio() {
     }
   }
 
-  function downloadBase64(imageBase64: string, name = `aiweb-image-${Date.now()}.png`) {
-    const link = document.createElement("a");
-    link.href = `data:image/png;base64,${imageBase64}`;
-    link.download = name;
-    link.click();
-  }
-
   function openHistoryImage(record: ImageRecord) {
     setImage(record.image_base64);
     setPrompt(record.prompt);
@@ -162,7 +159,9 @@ export function ImageStudio() {
     }
 
     const [width, height] = record.size.split("x").map(Number);
-    const preset = aspectRatios.flatMap((ratio) => openaiQualities.map((item) => ({ ratio, quality: item, size: presetSizes[ratio][item] }))).find((item) => item.size === record.size);
+    const preset = aspectRatios
+      .flatMap((ratio) => openaiQualities.map((item) => ({ ratio, quality: item, size: presetSizes[ratio][item] })))
+      .find((item) => item.size === record.size);
     if (preset) {
       setCustomSizeEnabled(false);
       setAspectRatio(preset.ratio);
@@ -238,14 +237,7 @@ export function ImageStudio() {
             </div>
 
             <div>
-              <div className="flex items-center justify-between gap-3">
-                <label className="text-sm font-medium">比例</label>
-                {!isGork && (
-                  <button className="text-xs text-[#5B7CFF] transition hover:text-[#466BFF]" onClick={() => setCustomSizeEnabled((value) => !value)}>
-                    {customSizeEnabled ? "使用预设" : "自定义分辨率"}
-                  </button>
-                )}
-              </div>
+              <label className="text-sm font-medium">画幅</label>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {aspectRatios.map((item) => (
                   <button
@@ -260,94 +252,111 @@ export function ImageStudio() {
                   </button>
                 ))}
               </div>
-
-              {!isGork && customSizeEnabled ? (
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <input
-                    value={customWidth}
-                    min={512}
-                    max={3840}
-                    step={16}
-                    type="number"
-                    className="h-10 rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
-                    onChange={(event) => setCustomWidth(Number(event.target.value))}
-                    aria-label="自定义宽度"
-                  />
-                  <input
-                    value={customHeight}
-                    min={512}
-                    max={3840}
-                    step={16}
-                    type="number"
-                    className="h-10 rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
-                    onChange={(event) => setCustomHeight(Number(event.target.value))}
-                    aria-label="自定义高度"
-                  />
-                </div>
-              ) : (
-                <div className={cn("mt-3 grid gap-2", isGork ? "grid-cols-2" : "grid-cols-3")}>
-                  {visibleQualities.map((item) => (
-                    <button
-                      key={item}
-                      onClick={() => setQuality(item)}
-                      className={cn(
-                        "h-10 rounded-xl border text-sm uppercase transition hover:scale-[1.02]",
-                        quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
-                      )}
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className={cn("mt-2 rounded-xl border px-3 py-2 text-xs", customSizeError ? "border-red-500/40 bg-red-500/10 text-red-600" : "border-border bg-background/70 text-muted-foreground")}>
-                {isGork ? `Gork 输出：${aspectRatio} · ${quality === "4k" ? "2k" : quality}` : `当前尺寸：${size}`}
-                {customSizeError ? ` · ${customSizeError}` : ""}
-              </div>
             </div>
 
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium">清晰度</label>
+                {!isGork && (
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={customSizeEnabled} onChange={(event) => setCustomSizeEnabled(event.target.checked)} />
+                    自定义分辨率
+                  </label>
+                )}
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {visibleQualities.map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setQuality(item)}
+                    className={cn(
+                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
+                      quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                    )}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {isGork ? "Gork 生图仅支持 1k / 2k，并使用所选画幅。" : `当前分辨率：${size}`}
+              </p>
+            </div>
+
+            {!isGork && customSizeEnabled && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-muted-foreground">宽度</label>
+                  <input
+                    type="number"
+                    min={512}
+                    max={3840}
+                    step={16}
+                    value={customWidth}
+                    onChange={(event) => setCustomWidth(Number(event.target.value))}
+                    className="mt-1 h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">高度</label>
+                  <input
+                    type="number"
+                    min={512}
+                    max={3840}
+                    step={16}
+                    value={customHeight}
+                    onChange={(event) => setCustomHeight(Number(event.target.value))}
+                    className="mt-1 h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none focus:border-[#5B7CFF]"
+                  />
+                </div>
+                {customSizeError && <p className="col-span-2 text-xs text-red-500">{customSizeError}</p>}
+              </div>
+            )}
+
             <Button className="w-full" disabled={loading || !prompt.trim() || Boolean(customSizeError)} onClick={() => createImage()}>
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              通过 {isGork ? "Gork" : "OpenAI"} 生成图片
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+              生成图片
             </Button>
           </div>
         </Card>
 
-        <Card className="overflow-hidden p-4">
-          <div className="relative grid min-h-[520px] place-items-center overflow-hidden rounded-2xl border border-border bg-background/70">
+        <Card className="min-h-[640px] overflow-hidden p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">预览</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{image ? "生成结果已准备好。" : "输入 Prompt 后开始创作。"}</p>
+            </div>
+            {image && (
+              <Button variant="secondary" size="sm" onClick={() => downloadBase64(image)}>
+                <Download className="h-4 w-4" />
+                下载
+              </Button>
+            )}
+          </div>
+
+          <div className="mt-5 grid min-h-[520px] place-items-center rounded-2xl border border-border bg-background/60">
             {loading ? (
-              <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-slate-200 via-white to-blue-100 dark:from-white/[0.06] dark:via-white/[0.1] dark:to-blue-500/10" />
+              <div className="w-full max-w-md space-y-4 p-8">
+                <div className="aspect-square animate-pulse rounded-3xl bg-[#5B7CFF]/10" />
+                <div className="h-3 animate-pulse rounded-full bg-muted" />
+                <div className="h-3 w-2/3 animate-pulse rounded-full bg-muted" />
+              </div>
             ) : image ? (
               <motion.img
+                key={image.slice(0, 32)}
+                src={`data:image/png;base64,${image}`}
+                alt="AI generated result"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.35 }}
-                src={`data:image/png;base64,${image}`}
-                alt="AI generated"
-                className="h-full max-h-[720px] w-full object-contain"
+                className="max-h-[680px] w-full rounded-2xl object-contain p-3"
               />
             ) : (
               <div className="text-center">
-                <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
-                  <ImageIcon className="h-6 w-6" />
-                </div>
-                <h3 className="mt-5 text-xl font-semibold">等待生成第一张作品</h3>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {isGork ? "Gork 模式仅支持比例和 1k/2k。" : "OpenAI 模式支持预设分辨率和自定义分辨率。"}
-                </p>
+                <ImageIcon className="mx-auto h-10 w-10 text-[#5B7CFF]" />
+                <h3 className="mt-4 text-lg font-semibold">暂无图片</h3>
+                <p className="mt-2 text-sm text-muted-foreground">你的生成结果会显示在这里。</p>
               </div>
             )}
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="secondary" disabled={!prompt.trim() || loading || Boolean(customSizeError)} onClick={() => createImage(prompt)}>
-              <RefreshCcw className="h-4 w-4" />
-              重新生成
-            </Button>
-            <Button disabled={!image} onClick={() => image && downloadBase64(image)}>
-              <Download className="h-4 w-4" />
-              下载原图
-            </Button>
           </div>
         </Card>
 
@@ -355,47 +364,44 @@ export function ImageStudio() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">最近生成</h3>
-              <p className="mt-1 text-xs text-muted-foreground">持久保存最近 10 张图，支持原图下载。</p>
+              <p className="mt-1 text-xs text-muted-foreground">保留最近 10 张，可预览和下载原图。</p>
             </div>
             <Button variant="secondary" size="icon" onClick={refreshImages} aria-label="刷新图片历史">
               {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
             </Button>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 2xl:grid-cols-1">
+          <div className="mt-4 space-y-3">
             {historyLoading && recentImages.length === 0 ? (
-              <div className="col-span-full flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                正在读取图片...
+                正在读取...
               </div>
             ) : recentImages.length === 0 ? (
-              <div className="col-span-full grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
+              <div className="grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
                 <div>
                   <ImageIcon className="mx-auto h-6 w-6 text-[#5B7CFF]" />
-                  <p className="mt-3 text-sm font-medium">暂无图片历史</p>
-                  <p className="mt-1 text-xs text-muted-foreground">生成成功后会自动出现在这里。</p>
+                  <p className="mt-3 text-sm font-medium">还没有图片</p>
+                  <p className="mt-1 text-xs text-muted-foreground">生成后会自动保存。</p>
                 </div>
               </div>
             ) : (
               recentImages.map((record) => (
-                <div key={record.id} className="overflow-hidden rounded-2xl border border-border bg-background/70 transition hover:-translate-y-0.5">
-                  <button className="block w-full" onClick={() => openHistoryImage(record)}>
-                    <img src={`data:image/png;base64,${record.image_base64}`} alt={record.prompt} className="aspect-square w-full object-cover" />
+                <div key={record.id} className="flex gap-3 rounded-2xl border border-border bg-background/70 p-2 transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50">
+                  <button className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-muted" onClick={() => openHistoryImage(record)}>
+                    <img src={`data:image/png;base64,${record.image_base64}`} alt={record.prompt} className="h-full w-full object-cover" />
                   </button>
-                  <div className="p-3">
-                    <p className="line-clamp-2 text-xs font-medium">{record.prompt}</p>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {record.style} · {record.size}
-                      </span>
-                      <button
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-card text-[#5B7CFF] transition hover:scale-[1.04]"
-                        onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}
-                        aria-label="下载原图"
-                      >
-                        <Download className="h-4 w-4" />
-                      </button>
+                  <div className="min-w-0 flex-1">
+                    <button className="line-clamp-2 text-left text-sm font-semibold" onClick={() => openHistoryImage(record)}>
+                      {record.prompt}
+                    </button>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {record.style} · {record.size}
                     </div>
+                    <Button variant="ghost" size="sm" className="mt-2 h-8 px-2" onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}>
+                      <Download className="h-3.5 w-3.5" />
+                      原图
+                    </Button>
                   </div>
                 </div>
               ))

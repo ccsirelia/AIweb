@@ -10,6 +10,7 @@ from models.schemas import ImageRecordOut, ImageRequest, ImageResponse
 from services.auth_service import current_user
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
+from services.token_usage_service import record_token_usage
 
 router = APIRouter(prefix="/api", tags=["image"])
 rate_limiter = InMemoryRateLimiter()
@@ -35,11 +36,10 @@ def validate_image2_size(size: str) -> str:
     if width > 3840 or height > 3840:
         raise HTTPException(status_code=422, detail="分辨率宽高不能超过 3840。")
     if width % 16 != 0 or height % 16 != 0:
-        raise HTTPException(status_code=422, detail="image2 自定义分辨率要求宽高都能被 16 整除。")
-
+        raise HTTPException(status_code=422, detail="自定义分辨率要求宽高都能被 16 整除。")
     ratio = width / height
     if ratio < 1 / 3 or ratio > 3:
-        raise HTTPException(status_code=422, detail="image2 自定义分辨率比例必须在 1:3 到 3:1 之间。")
+        raise HTTPException(status_code=422, detail="自定义分辨率比例必须在 1:3 到 3:1 之间。")
     if width * height > 3840 * 3840:
         raise HTTPException(status_code=422, detail="分辨率像素总量不能超过 3840x3840。")
     return f"{width}x{height}"
@@ -49,7 +49,7 @@ def resolve_openai_size(payload: ImageRequest) -> str:
     if payload.aspect_ratio != "custom" and payload.quality != "custom":
         expected = PRESET_SIZES.get(payload.aspect_ratio, {}).get(payload.quality)
         if expected and payload.size != expected:
-            raise HTTPException(status_code=422, detail=f"当前比例和清晰度对应的分辨率应为 {expected}。")
+            raise HTTPException(status_code=422, detail=f"当前画幅和清晰度对应的分辨率应为 {expected}。")
     return validate_image2_size(payload.size)
 
 
@@ -78,7 +78,8 @@ def image(
 
     try:
         service = OpenAIService(provider=payload.provider)
-        image_base64 = service.generate_image(payload)
+        result = service.generate_image(payload)
+        image_base64 = str(result["image_base64"])
         db.add(
             ImageRecord(
                 user_id=user.id,
@@ -88,13 +89,23 @@ def image(
                 image_base64=image_base64,
             )
         )
+        record_token_usage(
+            db,
+            user_id=user.id,
+            source="image",
+            provider=payload.provider,
+            model=str(result.get("model") or service.image_model),
+            prompt_tokens=int(result.get("prompt_tokens") or 0),
+            completion_tokens=int(result.get("completion_tokens") or 0),
+            total_tokens=int(result.get("total_tokens") or 0),
+        )
         db.commit()
         return ImageResponse(image_base64=image_base64)
     except OpenAIServiceError as exc:
         db.rollback()
         message = str(exc)
         if payload.provider == "gork" and "400" in message:
-            message = "Gork 生图请求被上游拒绝。请确认后台 Gork 生图模型为 grok-imagine-image-quality，并且前端只选择 1k 或 2k。"
-        elif "size" in message.lower() and "gpt-image-1" in message.lower():
-            message = "当前生图模型不支持该分辨率。请在后台将生图模型切换为支持自定义尺寸的 gpt-image-2，或选择该模型支持的尺寸。"
+            message = "Gork 生图请求被上游拒绝。请确认后台 Gork 生图模型配置正确，并且前端只选择 1k 或 2k。"
+        elif "size" in message.lower():
+            message = "当前模型或中转不支持该原生分辨率。系统已尽量使用合法底图尺寸并输出目标尺寸；如果仍失败，请检查后台生图模型配置。"
         raise HTTPException(status_code=502, detail=message) from exc

@@ -1,12 +1,15 @@
 import base64
+from io import BytesIO
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
+from PIL import Image, ImageOps
 
 from models.schemas import ImageRequest
 from services.settings_service import get_model_config, get_runtime_config, normalize_provider
+from services.token_usage_service import estimate_text_tokens, extract_usage_dict
 
 load_dotenv()
 
@@ -15,38 +18,26 @@ class OpenAIServiceError(RuntimeError):
     pass
 
 
-SYSTEM_PROMPT = """你是一个专业、清晰、可靠的 AI 创作助手。回答要有结构、准确，并保持简洁。
+SYSTEM_PROMPT = """You are a professional AI creation assistant. Answer clearly, accurately, and with structured Markdown.
 
-为了给前端展示类似 ChatGPT 的“思考”体验，你必须按下面格式返回：
-
+Return in this format:
 <ai_thought_summary>
-用公开可展示的高层分析说明你的处理过程，不要展示隐含推理链、逐字内心推理或私密 chain-of-thought。
-建议包含 3-6 条简洁要点，可按需要覆盖：
-- 理解问题：用户真正想解决什么
-- 关键依据：你抓住了哪些约束、条件或线索
-- 处理策略：你会采用什么路径组织答案
-- 注意事项：有哪些边界、风险或容易误解的点
-- 结论方向：最终答案将围绕什么展开
+Give a brief, user-visible reasoning summary with 1-5 concise bullets. Do not reveal private chain-of-thought.
 </ai_thought_summary>
 
 <ai_answer>
-这里输出正式答案。请使用清晰 Markdown 排版：
-- 多用标题、列表、表格和代码块
-- 数学公式必须使用 LaTeX 分隔符：行内公式写成 $a^2+b^2=c^2$，独立公式写成 $$...$$
-- 不要用普通方括号表示公式，例如不要写 [ e^{ix}=\\cos x+i\\sin x ]，要写成 $$e^{ix}=\\cos x+i\\sin x$$
-- 不要把 <ai_thought_summary> 或 <ai_answer> 标签放进代码块
+Write the final answer here. Use clean Markdown, tables, lists, and fenced code blocks when useful. For math, use LaTeX delimiters: inline math as $...$ and display math as $$...$$.
 </ai_answer>
-
-如果问题非常简单，思考说明可以只保留 1-2 条。"""
+"""
 
 
 STYLE_PROMPTS = {
-    "写实": "photorealistic, premium commercial visual, realistic lighting",
-    "动漫": "anime style, crisp line art, expressive color, polished composition",
+    "\u5199\u5b9e": "photorealistic, premium commercial visual, realistic lighting",
+    "\u52a8\u6f2b": "anime style, crisp line art, expressive color, polished composition",
     "3D": "high-end 3D render, cinematic lighting, detailed materials",
-    "油画": "oil painting, layered brush texture, gallery-quality composition",
-    "产品图": "premium product photography, clean studio background, soft shadows",
-    "摄影": "professional photography, editorial lighting, refined details",
+    "\u6cb9\u753b": "oil painting, layered brush texture, gallery-quality composition",
+    "\u4ea7\u54c1\u56fe": "premium product photography, clean studio background, soft shadows",
+    "\u6444\u5f71": "professional photography, editorial lighting, refined details",
 }
 
 
@@ -58,6 +49,42 @@ class OpenAIService:
             raise OpenAIServiceError(f"{self.provider.upper()} API key is not configured")
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.text_model, self.image_model = get_model_config(self.provider)
+
+    def _usage_payload(self, response: object, *, fallback_text: str = "") -> dict[str, int]:
+        usage = extract_usage_dict(response)
+        if usage["total_tokens"] > 0:
+            return usage
+
+        prompt_tokens = estimate_text_tokens(fallback_text)
+        completion_tokens = max(1, prompt_tokens // 2) if prompt_tokens else 0
+        total_tokens = prompt_tokens + completion_tokens
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _result_payload(self, text: str, response: object | None = None, *, fallback_text: str = "") -> dict[str, Any]:
+        usage = self._usage_payload(response, fallback_text=fallback_text or text) if response is not None else {
+            "prompt_tokens": estimate_text_tokens(fallback_text or text),
+            "completion_tokens": estimate_text_tokens(text),
+            "total_tokens": 0,
+        }
+        if usage["total_tokens"] <= 0:
+            prompt_tokens = estimate_text_tokens(fallback_text or text)
+            completion_tokens = estimate_text_tokens(text)
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+        return {
+            "text": text,
+            "model": self.text_model,
+            "prompt_tokens": usage["prompt_tokens"],
+            "completion_tokens": usage["completion_tokens"],
+            "total_tokens": usage["total_tokens"],
+        }
 
     def _extract_responses_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)
@@ -96,9 +123,9 @@ class OpenAIService:
                 if isinstance(data_url, str) and data_url:
                     content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
                 elif isinstance(text_content, str) and text_content:
-                    text_blocks.append(f"文件：{filename}\n{text_content}")
+                    text_blocks.append(f"File: {filename}\n{text_content}")
                 else:
-                    text_blocks.append(f"已上传文件：{filename}（{content_type}），当前仅作为文件信息提供。")
+                    text_blocks.append(f"Uploaded file: {filename} ({content_type}). Use this as attachment metadata.")
             if text_blocks:
                 content_parts.append({"type": "text", "text": "\n\n".join(text_blocks)})
             messages.append({"role": "user", "content": content_parts})
@@ -126,9 +153,9 @@ class OpenAIService:
                 if isinstance(data_url, str) and data_url:
                     content_parts.append({"type": "input_image", "image_url": data_url})
                 elif isinstance(text_content, str) and text_content:
-                    text_blocks.append(f"文件：{filename}\n{text_content}")
+                    text_blocks.append(f"File: {filename}\n{text_content}")
                 else:
-                    text_blocks.append(f"已上传文件：{filename}（{content_type}），当前仅作为文件信息提供。")
+                    text_blocks.append(f"Uploaded file: {filename} ({content_type}). Use this as attachment metadata.")
             if text_blocks:
                 content_parts.append({"type": "input_text", "text": "\n\n".join(text_blocks)})
             messages.append({"role": "user", "content": content_parts})
@@ -136,12 +163,30 @@ class OpenAIService:
             messages.append({"role": "user", "content": message})
         return messages
 
+    def _fallback_prompt_text(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None,
+        attachments: list[dict[str, str | int | None]] | None,
+    ) -> str:
+        parts = [SYSTEM_PROMPT]
+        for item in history or []:
+            parts.append(str(item.get("content") or ""))
+        parts.append(message)
+        for item in attachments or []:
+            text_content = item.get("text_content")
+            if isinstance(text_content, str) and text_content:
+                parts.append(text_content)
+            else:
+                parts.append(str(item.get("filename") or "attachment"))
+        return "\n".join(parts)
+
     def _chat_with_completions(
         self,
         message: str,
         history: list[dict[str, str]] | None = None,
         attachments: list[dict[str, str | int | None]] | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         response = self.client.chat.completions.create(
             model=self.text_model,
             messages=self._chat_completion_messages(message, history, attachments),
@@ -149,7 +194,11 @@ class OpenAIService:
         choice = response.choices[0] if response.choices else None
         text = choice.message.content if choice and choice.message else None
         if isinstance(text, str) and text.strip():
-            return text.strip()
+            return self._result_payload(
+                text.strip(),
+                response,
+                fallback_text=self._fallback_prompt_text(message, history, attachments),
+            )
         raise OpenAIServiceError("OpenAI returned an empty response")
 
     def chat(
@@ -157,7 +206,8 @@ class OpenAIService:
         message: str,
         history: list[dict[str, str]] | None = None,
         attachments: list[dict[str, str | int | None]] | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
+        fallback_text = self._fallback_prompt_text(message, history, attachments)
         try:
             response = self.client.responses.create(
                 model=self.text_model,
@@ -165,7 +215,7 @@ class OpenAIService:
             )
             text = self._extract_responses_text(response)
             if text:
-                return text
+                return self._result_payload(text, response, fallback_text=fallback_text)
 
             return self._chat_with_completions(message, history, attachments)
         except OpenAIError:
@@ -191,9 +241,44 @@ class OpenAIService:
 
         raise OpenAIServiceError("Image API returned no b64_json or url")
 
-    def generate_image(self, payload: ImageRequest) -> str:
-        style_direction = STYLE_PROMPTS.get(payload.style, STYLE_PROMPTS["写实"])
-        final_prompt = f"{payload.prompt}\nStyle direction: {style_direction}"
+    def _openai_generation_size(self, target_size: str) -> str:
+        if self.image_model.startswith("gpt-image-2"):
+            width, height = parse_image_size(target_size)
+            if width * height <= 8_294_400:
+                return target_size
+
+        width, height = parse_image_size(target_size)
+        if width > height:
+            return "1536x1024"
+        if height > width:
+            return "1024x1536"
+        return "1024x1024"
+
+    def _resize_image_base64(self, image_base64: str, target_size: str) -> str:
+        target_width, target_height = parse_image_size(target_size)
+        image_data = base64.b64decode(image_base64)
+        with Image.open(BytesIO(image_data)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            if image.size == (target_width, target_height):
+                return image_base64
+
+            resized = ImageOps.fit(
+                image,
+                (target_width, target_height),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+            output = BytesIO()
+            resized.save(output, format="PNG", optimize=True)
+        return base64.b64encode(output.getvalue()).decode("ascii")
+
+    def generate_image(self, payload: ImageRequest) -> dict[str, Any]:
+        style_direction = STYLE_PROMPTS.get(payload.style, STYLE_PROMPTS["\u5199\u5b9e"])
+        final_prompt = (
+            f"{payload.prompt}\n"
+            f"Style direction: {style_direction}\n"
+            f"Target composition: {payload.size} pixels, aspect ratio {payload.aspect_ratio}."
+        )
         try:
             if self.provider == "gork":
                 result = self.client.images.generate(
@@ -206,18 +291,51 @@ class OpenAIService:
                     },
                 )
             else:
+                api_size = self._openai_generation_size(payload.size)
                 result = self.client.images.generate(
                     model=self.image_model,
                     prompt=final_prompt,
-                    size=payload.size,
+                    size=api_size,
                     n=1,
                 )
 
             image_base64 = self._extract_image_base64(result)
             if not image_base64:
                 raise OpenAIServiceError("OpenAI returned an empty image")
-            return image_base64
+            if self.provider == "openai":
+                image_base64 = self._resize_image_base64(image_base64, payload.size)
+
+            usage = extract_usage_dict(result)
+            if usage["total_tokens"] <= 0:
+                prompt_tokens = estimate_text_tokens(final_prompt)
+                completion_tokens = max(1000, prompt_tokens)
+                usage = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+
+            return {
+                "image_base64": image_base64,
+                "model": self.image_model,
+                "prompt_tokens": usage["prompt_tokens"],
+                "completion_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+            }
         except OpenAIError as exc:
             raise OpenAIServiceError(str(exc)) from exc
         except httpx.HTTPError as exc:
             raise OpenAIServiceError(f"Image download failed: {exc}") from exc
+
+
+def parse_image_size(size: str) -> tuple[int, int]:
+    try:
+        width_text, height_text = size.lower().split("x", 1)
+        width = int(width_text)
+        height = int(height_text)
+    except (ValueError, AttributeError) as exc:
+        raise OpenAIServiceError(f"Invalid image size: {size}") from exc
+
+    if width <= 0 or height <= 0:
+        raise OpenAIServiceError(f"Invalid image size: {size}")
+    return width, height
