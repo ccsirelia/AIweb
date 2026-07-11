@@ -22,16 +22,17 @@ from services.admin_security import (
 )
 from services.auth_service import hash_password, verify_password
 from services.settings_service import (
-    SETTING_GORK_API_KEY,
-    SETTING_GORK_BASE_URL,
-    SETTING_GORK_IMAGE_MODEL,
-    SETTING_GORK_TEXT_MODEL,
+    SETTING_GROK_API_KEY,
+    SETTING_GROK_BASE_URL,
+    SETTING_GROK_IMAGE_MODEL,
+    SETTING_GROK_TEXT_MODEL,
     SETTING_OPENAI_API_KEY,
     SETTING_OPENAI_BASE_URL,
     SETTING_OPENAI_IMAGE_MODEL,
     SETTING_OPENAI_TEXT_MODEL,
     get_setting,
     mask_secret,
+    normalize_provider,
     set_setting,
 )
 
@@ -315,10 +316,10 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
     openai_text_model = get_setting(db, SETTING_OPENAI_TEXT_MODEL, "")
     openai_image_model = get_setting(db, SETTING_OPENAI_IMAGE_MODEL, "")
 
-    gork_base_url = get_setting(db, SETTING_GORK_BASE_URL, "")
-    gork_api_key = get_setting(db, SETTING_GORK_API_KEY, "")
-    gork_text_model = get_setting(db, SETTING_GORK_TEXT_MODEL, "")
-    gork_image_model = get_setting(db, SETTING_GORK_IMAGE_MODEL, "")
+    grok_base_url = get_setting(db, SETTING_GROK_BASE_URL, "")
+    grok_api_key = get_setting(db, SETTING_GROK_API_KEY, "")
+    grok_text_model = get_setting(db, SETTING_GROK_TEXT_MODEL, "")
+    grok_image_model = get_setting(db, SETTING_GROK_IMAGE_MODEL, "")
 
     users = db.query(UserAccount).order_by(desc(UserAccount.created_at)).all()
     message = request.query_params.get("message", "")
@@ -337,14 +338,14 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
         "gpt-image-1",
         csrf_token,
     )
-    gork_card = render_provider_card(
-        "Gork",
-        "通过 sub2 中转的 Gork/Grok 兼容通道配置。前端选择 Gork 时会使用这里的 Key 和模型。",
-        "gork",
-        gork_base_url,
-        gork_api_key,
-        gork_text_model,
-        gork_image_model,
+    grok_card = render_provider_card(
+        "Grok",
+        "通过 sub2 中转的 Grok 兼容通道配置。前端选择 Grok 时会使用这里的 Key 和模型。",
+        "grok",
+        grok_base_url,
+        grok_api_key,
+        grok_text_model,
+        grok_image_model,
         "https://你的-sub2-地址/v1",
         "grok-3-mini 或 sub2 映射模型名",
         "grok-2-image 或 sub2 映射模型名",
@@ -480,7 +481,7 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
           <div class="safe-box">
             <strong>密钥安全</strong>
 
-            <p>OpenAI 与 Gork API Key 都只保存在后端 SQLite 或环境变量中，前端不会读取。管理台已启用管理员会话鉴权与 CSRF 防护。</p>
+            <p>OpenAI 与 Grok API Key 都只保存在后端 SQLite 或环境变量中，前端不会读取。管理台已启用管理员会话鉴权与 CSRF 防护。</p>
             <p>当前管理员：{escape(admin.username)}</p>
             <form method="post" action="/admin/logout" style="margin-top:12px;">
               {csrf_field(csrf_token)}
@@ -503,7 +504,7 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
 
           <div class="grid">
             {openai_card}
-            {gork_card}
+            {grok_card}
 
             <section class="card wide" id="users">
               <div class="card-head">
@@ -564,20 +565,20 @@ async def update_settings(request: Request, db: Session = Depends(get_db)) -> Re
     if not validate_csrf(request, data.get("csrf_token", "")):
         return redirect_admin("CSRF 校验失败，请刷新页面后重试。")
 
-    provider = data.get("provider", "openai").strip().lower()
+    provider = normalize_provider(data.get("provider", "openai"))
     base_url = data.get("base_url", "").strip()
     api_key = data.get("api_key", "").strip()
     text_model = data.get("text_model", "").strip()
     image_model = data.get("image_model", "").strip()
 
-    if provider == "gork":
-        set_setting(db, SETTING_GORK_BASE_URL, base_url)
-        set_setting(db, SETTING_GORK_TEXT_MODEL, text_model)
-        set_setting(db, SETTING_GORK_IMAGE_MODEL, image_model)
+    if provider == "grok":
+        set_setting(db, SETTING_GROK_BASE_URL, base_url)
+        set_setting(db, SETTING_GROK_TEXT_MODEL, text_model)
+        set_setting(db, SETTING_GROK_IMAGE_MODEL, image_model)
         if api_key:
-            set_setting(db, SETTING_GORK_API_KEY, api_key)
+            set_setting(db, SETTING_GROK_API_KEY, api_key)
         db.commit()
-        return redirect_admin("Gork 配置已保存")
+        return redirect_admin("Grok 配置已保存")
 
     set_setting(db, SETTING_OPENAI_BASE_URL, base_url)
     set_setting(db, SETTING_OPENAI_TEXT_MODEL, text_model)

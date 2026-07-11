@@ -32,7 +32,7 @@ const CHAT_PROVIDER_KEY = "aiweb_chat_provider";
 const FILE_ACCEPT = "image/*,.txt,.md,.csv,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.py,.js,.jsx,.ts,.tsx,.html,.css,.xml,.yaml,.yml";
 const providers: { label: string; value: Provider }[] = [
   { label: "OpenAI", value: "openai" },
-  { label: "Gork", value: "gork" }
+  { label: "Grok", value: "grok" }
 ];
 
 function readPendingJobs(): ChatJob[] {
@@ -119,8 +119,12 @@ export function ChatPanel() {
       return;
     }
     const storedProvider = localStorage.getItem(CHAT_PROVIDER_KEY);
-    if (storedProvider === "openai" || storedProvider === "gork") {
-      setProvider(storedProvider);
+    // Accept legacy misspelling "gork".
+    if (storedProvider === "openai" || storedProvider === "grok" || storedProvider === "gork") {
+      setProvider(storedProvider === "gork" ? "grok" : storedProvider);
+      if (storedProvider === "gork") {
+        localStorage.setItem(CHAT_PROVIDER_KEY, "grok");
+      }
     }
     const storedSessionId = Number(localStorage.getItem(ACTIVE_SESSION_KEY) || "");
     const storedJobs = readPendingJobs();
@@ -303,7 +307,7 @@ export function ChatPanel() {
   function renderAssistantMessage(content: string) {
     const parsed = parseAssistantContent(content);
     return (
-      <>
+      <div className="w-full min-w-0">
         {parsed.thought && (
           <details className="mb-3 rounded-xl border border-[#5B7CFF]/20 bg-[#5B7CFF]/5 px-3 py-2">
             <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-[#5B7CFF]">
@@ -316,26 +320,27 @@ export function ChatPanel() {
           </details>
         )}
         <MarkdownContent content={parsed.answer} />
-        <div className="mt-3 flex justify-end">
+        <div className="mt-3 flex justify-end border-t border-border/60 pt-2">
           <Button variant="ghost" size="sm" onClick={() => copyText(parsed.answer)}>
             <Copy className="h-3.5 w-3.5" />
             复制
           </Button>
         </div>
-      </>
+      </div>
     );
   }
 
   return (
     <PageShell>
-      <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
-        <Card className="flex min-h-[72vh] flex-col overflow-hidden">
-          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
-            <div>
-              <h2 className="text-lg font-semibold">GPT 文字对话</h2>
-              <p className="mt-1 text-sm text-muted-foreground">支持 OpenAI / Gork 通道、Markdown、数学公式、代码块和附件分析。</p>
+      {/* Fixed viewport height so only the message list scrolls, not the whole page. */}
+      <div className="grid h-[calc(100dvh-7.25rem)] min-h-[520px] gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3.5 sm:px-6">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold tracking-tight">GPT 文字对话</h2>
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">OpenAI / Grok · Markdown · 公式 · 附件分析</p>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <div className="flex rounded-xl border border-border bg-background/70 p-1">
                 {providers.map((item) => (
                   <button
@@ -357,44 +362,55 @@ export function ChatPanel() {
             </div>
           </div>
 
-          <div className="soft-scrollbar flex-1 space-y-4 overflow-y-auto p-5">
-            {messages.length === 0 ? (
-              <div className="grid h-full min-h-[360px] place-items-center text-center">
-                <div>
-                  <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
-                    <SendHorizontal className="h-6 w-6" />
+          <div className="soft-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5 sm:py-5">
+            {/* Full-width message rail so bubbles track the dialog width. */}
+            <div className="mx-auto flex w-full max-w-none flex-col gap-4">
+              {messages.length === 0 ? (
+                <div className="grid min-h-[240px] flex-1 place-items-center text-center">
+                  <div className="max-w-lg">
+                    <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
+                      <SendHorizontal className="h-6 w-6" />
+                    </div>
+                    <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">选择通道后发送消息，回复会铺满对话区宽度，阅读更连贯。</p>
                   </div>
-                  <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">选择通道后发送消息，API Key 始终只在后端使用。</p>
                 </div>
-              </div>
-            ) : (
-              messages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
+              ) : (
+                messages.map((message, index) => (
                   <div
-                    className={
-                      message.role === "user"
-                        ? "max-w-[86%] rounded-2xl bg-[#5B7CFF] px-4 py-3 text-sm leading-6 text-white"
-                        : "max-w-[86%] rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6"
-                    }
+                    key={`${message.role}-${index}`}
+                    className={cn("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}
                   >
-                    {message.role === "assistant" ? renderAssistantMessage(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
+                    <div
+                      className={cn(
+                        "text-sm leading-6",
+                        message.role === "user"
+                          ? "chat-user-bubble w-fit max-w-[min(100%,42rem)] rounded-2xl rounded-br-md bg-[#5B7CFF] px-4 py-3 text-white shadow-sm sm:px-5"
+                          : "chat-assistant-bubble w-full max-w-full rounded-2xl rounded-bl-md border border-border bg-background/80 px-4 py-3.5 shadow-sm sm:px-5 sm:py-4"
+                      )}
+                    >
+                      {message.role === "assistant" ? (
+                        renderAssistantMessage(message.content)
+                      ) : (
+                        <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {loading && (
+                <div className="flex w-full justify-start">
+                  <div className="inline-flex items-center gap-3 rounded-2xl border border-border bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                    <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
+                    AI 正在通过 {provider === "grok" ? "Grok" : "OpenAI"} 通道组织回复...
                   </div>
                 </div>
-              ))
-            )}
-
-            {loading && (
-              <div className="flex justify-start">
-                <div className="flex items-center gap-3 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                  AI 正在通过 {provider === "gork" ? "Gork" : "OpenAI"} 通道组织回复...
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          <div className="border-t border-border p-4">
+          <div className="shrink-0 border-t border-border bg-card/40 px-4 py-3.5 sm:px-5">
             <div className="flex flex-col gap-3">
               {selectedFiles.length > 0 && (
                 <div className="flex flex-wrap gap-2">
@@ -412,6 +428,7 @@ export function ChatPanel() {
               <Textarea
                 value={input}
                 maxLength={4000}
+                className="min-h-[96px]"
                 placeholder="输入你的问题或创作需求，Enter 发送，Shift + Enter 换行..."
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -446,25 +463,25 @@ export function ChatPanel() {
           </div>
         </Card>
 
-        <Card className="p-5">
-          <div className="flex items-center justify-between gap-3">
+        <Card className="flex h-full min-h-0 flex-col overflow-hidden p-4 sm:p-5">
+          <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">最近会话</h3>
-              <p className="mt-1 text-xs text-muted-foreground">保留最近 10 条，可继续原对话。</p>
+              <p className="mt-1 text-xs text-muted-foreground">最近 10 条，可继续原对话</p>
             </div>
             <Button variant="secondary" size="icon" onClick={startNewChat} aria-label="新对话">
               <Plus className="h-4 w-4" />
             </Button>
           </div>
 
-          <div className="mt-4 space-y-2">
+          <div className="soft-scrollbar mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-0.5">
             {sessionsLoading ? (
               <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
                 正在读取...
               </div>
             ) : sessions.length === 0 ? (
-              <div className="grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
+              <div className="grid min-h-[200px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
                 <div>
                   <MessageSquareText className="mx-auto h-6 w-6 text-[#5B7CFF]" />
                   <p className="mt-3 text-sm font-medium">还没有会话</p>
@@ -476,7 +493,7 @@ export function ChatPanel() {
                 <div
                   key={session.id}
                   className={cn(
-                    "group flex w-full items-start gap-2 rounded-2xl border border-border bg-background/70 p-3 text-left transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50",
+                    "group flex w-full items-start gap-2 rounded-2xl border border-border bg-background/70 p-3 text-left transition hover:border-[#5B7CFF]/45",
                     activeSessionId === session.id && "border-[#5B7CFF] bg-[#5B7CFF]/10"
                   )}
                 >

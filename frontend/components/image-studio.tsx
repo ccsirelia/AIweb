@@ -24,10 +24,10 @@ import { cn } from "@/lib/utils";
 const styles = ["写实", "动漫", "3D", "油画", "产品图", "摄影"];
 const aspectRatios = ["16:9", "1:1", "9:16"] as const;
 const openaiQualities = ["1k", "2k", "4k"] as const;
-const gorkQualities = ["1k", "2k"] as const;
+const grokQualities = ["1k", "2k"] as const;
 const providers: { label: string; value: Provider }[] = [
   { label: "OpenAI", value: "openai" },
-  { label: "Gork", value: "gork" }
+  { label: "Grok", value: "grok" }
 ];
 const presetSizes = {
   "16:9": { "1k": "1920x1024", "2k": "2560x1440", "4k": "3840x2160" },
@@ -90,14 +90,14 @@ export function ImageStudio() {
   const [pendingJobs, setPendingJobs] = useState<ImageJob[]>([]);
   const router = useRouter();
 
-  const isGork = provider === "gork";
-  const visibleQualities = isGork ? gorkQualities : openaiQualities;
+  const isGrok = provider === "grok";
+  const visibleQualities = isGrok ? grokQualities : openaiQualities;
   const size = useMemo(() => {
-    if (isGork) return `${aspectRatio} ${quality === "4k" ? "2k" : quality}`;
+    if (isGrok) return `${aspectRatio} ${quality === "4k" ? "2k" : quality}`;
     if (customSizeEnabled) return `${customWidth}x${customHeight}`;
     return presetSizes[aspectRatio][quality];
-  }, [aspectRatio, customHeight, customSizeEnabled, customWidth, isGork, quality]);
-  const customSizeError = !isGork && customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
+  }, [aspectRatio, customHeight, customSizeEnabled, customWidth, isGrok, quality]);
+  const customSizeError = !isGrok && customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -105,9 +105,14 @@ export function ImageStudio() {
       return;
     }
     const storedProvider = localStorage.getItem(IMAGE_PROVIDER_KEY);
-    if (storedProvider === "openai" || storedProvider === "gork") {
-      setProvider(storedProvider);
+    // Accept legacy misspelling "gork".
+    if (storedProvider === "openai" || storedProvider === "grok" || storedProvider === "gork") {
+      const nextProvider = storedProvider === "gork" ? "grok" : storedProvider;
+      setProvider(nextProvider);
       if (storedProvider === "gork") {
+        localStorage.setItem(IMAGE_PROVIDER_KEY, "grok");
+      }
+      if (nextProvider === "grok") {
         setQuality((value) => (value === "4k" ? "2k" : value));
         setCustomSizeEnabled(false);
       }
@@ -166,7 +171,7 @@ export function ImageStudio() {
   function changeProvider(value: Provider) {
     setProvider(value);
     localStorage.setItem(IMAGE_PROVIDER_KEY, value);
-    if (value === "gork") {
+    if (value === "grok") {
       setQuality((current) => (current === "4k" ? "2k" : current));
       setCustomSizeEnabled(false);
     }
@@ -199,15 +204,15 @@ export function ImageStudio() {
       return;
     }
 
-    const nextQuality = isGork && quality === "4k" ? "2k" : quality;
+    const nextQuality = isGrok && quality === "4k" ? "2k" : quality;
     setLoading(true);
     try {
       const job = await createImageJob({
         prompt: trimmed,
         style,
-        size: isGork ? presetSizes[aspectRatio][nextQuality] : size,
-        aspect_ratio: isGork ? aspectRatio : customSizeEnabled ? "custom" : aspectRatio,
-        quality: isGork ? nextQuality : customSizeEnabled ? "custom" : quality,
+        size: isGrok ? presetSizes[aspectRatio][nextQuality] : size,
+        aspect_ratio: isGrok ? aspectRatio : customSizeEnabled ? "custom" : aspectRatio,
+        quality: isGrok ? nextQuality : customSizeEnabled ? "custom" : quality,
         provider
       });
       const jobs = [...readPendingImageJobs().filter((item) => item.id !== job.id), job];
@@ -223,11 +228,11 @@ export function ImageStudio() {
     setImage(record.image_base64);
     setPrompt(record.prompt);
     setStyle(styles.includes(record.style) ? record.style : "写实");
-    const gorkMatch = record.size.match(/^(16:9|1:1|9:16)\s+(1k|2k)$/);
-    if (gorkMatch) {
-      setProvider("gork");
-      setAspectRatio(gorkMatch[1] as AspectRatio);
-      setQuality(gorkMatch[2] as Quality);
+    const grokMatch = record.size.match(/^(16:9|1:1|9:16)\s+(1k|2k)$/);
+    if (grokMatch) {
+      setProvider("grok");
+      setAspectRatio(grokMatch[1] as AspectRatio);
+      setQuality(grokMatch[2] as Quality);
       setCustomSizeEnabled(false);
       return;
     }
@@ -249,15 +254,15 @@ export function ImageStudio() {
 
   return (
     <PageShell>
-      <div className="grid gap-5 2xl:grid-cols-[420px_1fr_340px] xl:grid-cols-[380px_1fr]">
-        <Card className="p-5">
+      <div className="grid h-auto min-h-[calc(100dvh-7.25rem)] gap-4 lg:gap-5 xl:grid-cols-[minmax(300px,0.95fr)_minmax(0,1.65fr)_320px] xl:items-stretch">
+        <Card className="flex min-h-0 flex-col p-4 sm:p-5">
           <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
               <WandSparkles className="h-5 w-5" />
             </div>
-            <div>
-              <h2 className="text-lg font-semibold">AI Image Studio</h2>
-              <p className="text-sm text-muted-foreground">选择通道生成商业级视觉草图（异步任务队列）。</p>
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold tracking-tight">AI Image Studio</h2>
+              <p className="text-sm text-muted-foreground">通道生图 · 异步任务队列</p>
             </div>
           </div>
 
@@ -269,8 +274,8 @@ export function ImageStudio() {
                   key={item.value}
                   onClick={() => changeProvider(item.value)}
                   className={cn(
-                    "h-10 rounded-xl border text-sm font-semibold transition hover:scale-[1.02]",
-                    provider === item.value ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                    "h-10 rounded-xl border text-sm font-semibold transition",
+                    provider === item.value ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70 hover:border-[#5B7CFF]/40"
                   )}
                 >
                   {item.label}
@@ -279,13 +284,13 @@ export function ImageStudio() {
             </div>
           </div>
 
-          <div className="mt-6 space-y-5">
-            <div>
+          <div className="mt-5 flex min-h-0 flex-1 flex-col space-y-4">
+            <div className="flex min-h-0 flex-1 flex-col">
               <label className="text-sm font-medium">Prompt</label>
               <Textarea
                 value={prompt}
                 maxLength={1200}
-                className="mt-2 min-h-[180px]"
+                className="mt-2 min-h-[140px] flex-1"
                 placeholder="一只穿宇航服的橘猫，赛博朋克风格，电影感灯光..."
                 onChange={(event) => setPrompt(event.target.value)}
               />
@@ -300,8 +305,8 @@ export function ImageStudio() {
                     key={item}
                     onClick={() => setStyle(item)}
                     className={cn(
-                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
-                      style === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                      "h-9 rounded-xl border text-sm transition",
+                      style === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70 hover:border-[#5B7CFF]/40"
                     )}
                   >
                     {item}
@@ -318,8 +323,8 @@ export function ImageStudio() {
                     key={item}
                     onClick={() => setAspectRatio(item)}
                     className={cn(
-                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
-                      aspectRatio === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                      "h-9 rounded-xl border text-sm transition",
+                      aspectRatio === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70 hover:border-[#5B7CFF]/40"
                     )}
                   >
                     {item}
@@ -331,7 +336,7 @@ export function ImageStudio() {
             <div>
               <div className="flex items-center justify-between gap-3">
                 <label className="text-sm font-medium">清晰度</label>
-                {!isGork && (
+                {!isGrok && (
                   <label className="flex items-center gap-2 text-xs text-muted-foreground">
                     <input type="checkbox" checked={customSizeEnabled} onChange={(event) => setCustomSizeEnabled(event.target.checked)} />
                     自定义分辨率
@@ -344,8 +349,8 @@ export function ImageStudio() {
                     key={item}
                     onClick={() => setQuality(item)}
                     className={cn(
-                      "h-10 rounded-xl border text-sm transition hover:scale-[1.02]",
-                      quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70"
+                      "h-9 rounded-xl border text-sm transition",
+                      quality === item ? "border-[#5B7CFF] bg-[#5B7CFF] text-white" : "border-border bg-background/70 hover:border-[#5B7CFF]/40"
                     )}
                   >
                     {item}
@@ -353,11 +358,11 @@ export function ImageStudio() {
                 ))}
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                {isGork ? "Gork 生图仅支持 1k / 2k，并使用所选画幅。" : `当前分辨率：${size}`}
+                {isGrok ? "Grok 生图仅支持 1k / 2k，并使用所选画幅。" : `当前分辨率：${size}`}
               </p>
             </div>
 
-            {!isGork && customSizeEnabled && (
+            {!isGrok && customSizeEnabled && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-muted-foreground">宽度</label>
@@ -397,11 +402,11 @@ export function ImageStudio() {
           </div>
         </Card>
 
-        <Card className="min-h-[640px] overflow-hidden p-5">
-          <div className="flex items-center justify-between gap-3">
+        <Card className="flex min-h-[560px] flex-col overflow-hidden p-4 sm:min-h-[640px] sm:p-5 xl:min-h-0">
+          <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">预览</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{image ? "生成结果已准备好。" : "输入 Prompt 后开始创作。"}</p>
+              <h2 className="text-lg font-semibold tracking-tight">预览</h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">{image ? "生成结果已准备好。" : "输入 Prompt 后开始创作。"}</p>
             </div>
             {image && (
               <Button variant="secondary" size="sm" onClick={() => downloadBase64(image)}>
@@ -411,9 +416,9 @@ export function ImageStudio() {
             )}
           </div>
 
-          <div className="mt-5 grid min-h-[520px] place-items-center rounded-2xl border border-border bg-background/60">
+          <div className="mt-4 grid min-h-0 flex-1 place-items-center rounded-2xl border border-border bg-background/60">
             {loading ? (
-              <div className="w-full max-w-md space-y-4 p-8">
+              <div className="w-full max-w-lg space-y-4 p-8">
                 <div className="aspect-square animate-pulse rounded-3xl bg-[#5B7CFF]/10" />
                 <div className="h-3 animate-pulse rounded-full bg-muted" />
                 <div className="h-3 w-2/3 animate-pulse rounded-full bg-muted" />
@@ -426,37 +431,37 @@ export function ImageStudio() {
                 alt="AI generated result"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="max-h-[680px] w-full rounded-2xl object-contain p-3"
+                className="max-h-[min(72vh,760px)] w-full rounded-2xl object-contain p-3 sm:p-4"
               />
             ) : (
               <div className="text-center">
                 <ImageIcon className="mx-auto h-10 w-10 text-[#5B7CFF]" />
                 <h3 className="mt-4 text-lg font-semibold">暂无图片</h3>
-                <p className="mt-2 text-sm text-muted-foreground">你的生成结果会显示在这里。</p>
+                <p className="mt-2 text-sm text-muted-foreground">更宽的预览区，方便查看高分辨率结果。</p>
               </div>
             )}
           </div>
         </Card>
 
-        <Card className="p-5 xl:col-span-2 2xl:col-span-1">
-          <div className="flex items-center justify-between gap-3">
+        <Card className="flex min-h-0 flex-col overflow-hidden p-4 sm:p-5 xl:max-h-[calc(100dvh-7.25rem)]">
+          <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">最近生成</h3>
-              <p className="mt-1 text-xs text-muted-foreground">保留最近 10 张，可预览和下载原图。</p>
+              <p className="mt-1 text-xs text-muted-foreground">最近 10 张，可预览下载</p>
             </div>
             <Button variant="secondary" size="icon" onClick={refreshImages} aria-label="刷新图片历史">
               {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
             </Button>
           </div>
 
-          <div className="mt-4 space-y-3">
+          <div className="soft-scrollbar mt-3 min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain pr-0.5">
             {historyLoading && recentImages.length === 0 ? (
               <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
                 正在读取...
               </div>
             ) : recentImages.length === 0 ? (
-              <div className="grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
+              <div className="grid min-h-[200px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
                 <div>
                   <ImageIcon className="mx-auto h-6 w-6 text-[#5B7CFF]" />
                   <p className="mt-3 text-sm font-medium">还没有图片</p>
@@ -465,8 +470,8 @@ export function ImageStudio() {
               </div>
             ) : (
               recentImages.map((record) => (
-                <div key={record.id} className="flex gap-3 rounded-2xl border border-border bg-background/70 p-2 transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50">
-                  <button className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-muted" onClick={() => openHistoryImage(record)}>
+                <div key={record.id} className="flex gap-3 rounded-2xl border border-border bg-background/70 p-2 transition hover:border-[#5B7CFF]/45">
+                  <button className="h-[4.5rem] w-[4.5rem] shrink-0 overflow-hidden rounded-xl bg-muted" onClick={() => openHistoryImage(record)}>
                     <img src={`data:image/png;base64,${record.image_base64}`} alt={record.prompt} className="h-full w-full object-cover" />
                   </button>
                   <div className="min-w-0 flex-1">
@@ -476,7 +481,7 @@ export function ImageStudio() {
                     <div className="mt-1 text-xs text-muted-foreground">
                       {record.style} · {record.size}
                     </div>
-                    <Button variant="ghost" size="sm" className="mt-2 h-8 px-2" onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}>
+                    <Button variant="ghost" size="sm" className="mt-1.5 h-8 px-2" onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}>
                       <Download className="h-3.5 w-3.5" />
                       原图
                     </Button>

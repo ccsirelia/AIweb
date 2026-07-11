@@ -39,7 +39,7 @@ export type ImageRecord = {
   created_at: string;
 };
 
-export type Provider = "openai" | "gork";
+export type Provider = "openai" | "grok";
 
 export type ImageJob = {
   id: number;
@@ -172,10 +172,11 @@ export function sendChat(message: string, sessionId?: number | null, provider: P
 export function createChatJob(message: string, sessionId?: number | null, files?: File[], provider: Provider = "openai") {
   if (files?.length) {
     const form = new FormData();
-    form.append("message", message);
+    form.append("message", message || "请分析这些附件。");
     form.append("provider", provider);
-    if (sessionId) form.append("session_id", String(sessionId));
-    files.forEach((file) => form.append("files", file));
+    if (sessionId != null) form.append("session_id", String(sessionId));
+    // Use the same field name the backend expects; include filename for proxies.
+    files.forEach((file) => form.append("files", file, file.name));
     return request<ChatJob>("/api/chat/jobs", {
       method: "POST",
       body: form

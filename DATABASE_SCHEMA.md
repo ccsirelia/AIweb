@@ -98,7 +98,7 @@ cd backend
 | user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
 | session_id | INTEGER | FOREIGN KEY, INDEX | 所属会话 |
 | user_message_id | INTEGER | FOREIGN KEY, INDEX | 触发任务的用户消息 |
-| provider | VARCHAR(40) | NOT NULL, 默认 openai | openai / gork |
+| provider | VARCHAR(40) | NOT NULL, 默认 openai | openai / grok |
 | status | VARCHAR(20) | NOT NULL, INDEX | pending / running / completed / failed |
 | error | TEXT | NOT NULL | 失败时的友好错误文案 |
 | created_at | DATETIME | INDEX | 入队时间，UTC |
@@ -135,7 +135,7 @@ cd backend
 | size | VARCHAR(40) | NOT NULL | 解析后尺寸，如 `1024x1024` 或 `16:9 1k` |
 | aspect_ratio | VARCHAR(20) | NOT NULL | 画幅 |
 | quality | VARCHAR(20) | NOT NULL | 清晰度 |
-| provider | VARCHAR(40) | NOT NULL, INDEX | openai / gork |
+| provider | VARCHAR(40) | NOT NULL, INDEX | openai / grok |
 | status | VARCHAR(20) | NOT NULL, INDEX | pending / running / completed / failed |
 | error | TEXT | NOT NULL | 失败文案 |
 | image_record_id | INTEGER | FOREIGN KEY, NULL | 成功后的图片记录 |
@@ -152,7 +152,7 @@ Token 用量统计表。聊天与生图成功后写入。
 | id | INTEGER | PRIMARY KEY, INDEX | 记录 ID |
 | user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
 | source | VARCHAR(20) | NOT NULL, INDEX | chat / image |
-| provider | VARCHAR(40) | NOT NULL | openai / gork |
+| provider | VARCHAR(40) | NOT NULL | openai / grok |
 | model | VARCHAR(120) | NOT NULL | 模型名 |
 | prompt_tokens | INTEGER | NOT NULL | 输入 token |
 | completion_tokens | INTEGER | NOT NULL | 输出 token |
@@ -178,6 +178,10 @@ Token 用量统计表。聊天与生图成功后写入。
 | openai_api_key | 后端使用的 OpenAI API Key |
 | openai_text_model | 文字对话使用的模型 |
 | openai_image_model | AI 生图使用的模型 |
+| grok_base_url | Grok / sub2 兼容服务 Base URL |
+| grok_api_key | 后端使用的 Grok API Key |
+| grok_text_model | Grok 文字对话模型 |
+| grok_image_model | Grok 生图模型 |
 
 安全说明：
 

@@ -11,6 +11,7 @@ from services.auth_service import current_user
 from services.image_job_service import public_image_error
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
+from services.settings_service import normalize_provider
 from services.token_usage_service import record_token_usage
 
 router = APIRouter(prefix="/api", tags=["image"])
@@ -21,8 +22,8 @@ PRESET_SIZES = {
     "1:1": {"1k": "1024x1024", "2k": "2560x2560", "4k": "3840x3840"},
     "9:16": {"1k": "1024x1920", "2k": "1440x2560", "4k": "2160x3840"},
 }
-GORK_ASPECT_RATIOS = {"16:9", "1:1", "9:16"}
-GORK_RESOLUTIONS = {"1k", "2k"}
+GROK_ASPECT_RATIOS = {"16:9", "1:1", "9:16"}
+GROK_RESOLUTIONS = {"1k", "2k"}
 
 
 def validate_image2_size(size: str) -> str:
@@ -54,11 +55,11 @@ def resolve_openai_size(payload: ImageRequest) -> str:
     return validate_image2_size(payload.size)
 
 
-def resolve_gork_size(payload: ImageRequest) -> str:
-    if payload.aspect_ratio not in GORK_ASPECT_RATIOS:
-        raise HTTPException(status_code=422, detail="Gork 生图只支持 16:9、1:1、9:16。")
-    if payload.quality not in GORK_RESOLUTIONS:
-        raise HTTPException(status_code=422, detail="Gork 生图只支持 1k 或 2k，不支持 4k 或自定义分辨率。")
+def resolve_grok_size(payload: ImageRequest) -> str:
+    if payload.aspect_ratio not in GROK_ASPECT_RATIOS:
+        raise HTTPException(status_code=422, detail="Grok 生图只支持 16:9、1:1、9:16。")
+    if payload.quality not in GROK_RESOLUTIONS:
+        raise HTTPException(status_code=422, detail="Grok 生图只支持 1k 或 2k，不支持 4k 或自定义分辨率。")
     return f"{payload.aspect_ratio} {payload.quality}"
 
 
@@ -108,7 +109,8 @@ def create_image_job(
     user: UserAccount = Depends(current_user),
 ) -> ImageJobOut:
     """Enqueue an image job for the in-process worker. Returns immediately."""
-    resolved_size = resolve_gork_size(payload) if payload.provider == "gork" else resolve_openai_size(payload)
+    provider = normalize_provider(payload.provider)
+    resolved_size = resolve_grok_size(payload) if provider == "grok" else resolve_openai_size(payload)
     job = ImageJob(
         user_id=user.id,
         prompt=payload.prompt.strip(),
@@ -116,7 +118,7 @@ def create_image_job(
         size=resolved_size,
         aspect_ratio=payload.aspect_ratio,
         quality=payload.quality,
-        provider=payload.provider,
+        provider=provider,
         status="pending",
     )
     db.add(job)
@@ -132,12 +134,13 @@ def image(
     user: UserAccount = Depends(current_user),
 ) -> ImageResponse:
     """Synchronous image generation (compatibility). Prefer POST /api/image/jobs."""
-    resolved_size = resolve_gork_size(payload) if payload.provider == "gork" else resolve_openai_size(payload)
-    if payload.provider == "openai":
+    provider = normalize_provider(payload.provider)
+    resolved_size = resolve_grok_size(payload) if provider == "grok" else resolve_openai_size(payload)
+    if provider == "openai":
         payload.size = resolved_size
 
     try:
-        service = OpenAIService(provider=payload.provider)
+        service = OpenAIService(provider=provider)
         result = service.generate_image(payload)
         image_base64 = str(result["image_base64"])
         db.add(
@@ -153,7 +156,7 @@ def image(
             db,
             user_id=user.id,
             source="image",
-            provider=payload.provider,
+            provider=provider,
             model=str(result.get("model") or service.image_model),
             prompt_tokens=int(result.get("prompt_tokens") or 0),
             completion_tokens=int(result.get("completion_tokens") or 0),
@@ -163,4 +166,4 @@ def image(
         return ImageResponse(image_base64=image_base64)
     except OpenAIServiceError as exc:
         db.rollback()
-        raise HTTPException(status_code=502, detail=public_image_error(exc, payload.provider)) from exc
+        raise HTTPException(status_code=502, detail=public_image_error(exc, provider)) from exc

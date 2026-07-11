@@ -77,10 +77,25 @@ def migrate_sqlite_schema() -> None:
         if "started_at" not in job_columns:
             _run_sql("ALTER TABLE chat_jobs ADD COLUMN started_at DATETIME")
 
+    # Rename legacy provider misspelling gork → grok in job/usage tables.
+    if _table_exists("chat_jobs"):
+        _run_sql("UPDATE chat_jobs SET provider = 'grok' WHERE provider = 'gork'")
+    if _table_exists("image_jobs"):
+        _run_sql("UPDATE image_jobs SET provider = 'grok' WHERE provider = 'gork'")
+    if _table_exists("token_usage_records"):
+        _run_sql("UPDATE token_usage_records SET provider = 'grok' WHERE provider = 'gork'")
+
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_sqlite_schema()
+    try:
+        from services.settings_service import migrate_gork_settings
+
+        migrate_gork_settings()
+    except Exception:
+        # Settings migration is best-effort; app should still start.
+        pass
 
 
 if __name__ == "__main__":

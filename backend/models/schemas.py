@@ -1,13 +1,22 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
-Provider = Literal["openai", "gork"]
+Provider = Literal["openai", "grok"]
 ImageStyle = Literal["\u5199\u5b9e", "\u52a8\u6f2b", "3D", "\u6cb9\u753b", "\u4ea7\u54c1\u56fe", "\u6444\u5f71"]
 ImageAspectRatio = Literal["16:9", "1:1", "9:16", "custom"]
 ImageQuality = Literal["1k", "2k", "4k", "custom"]
+
+
+def _normalize_provider_value(value: object) -> str:
+    text = str(value or "openai").strip().lower()
+    if text == "gork":
+        return "grok"
+    if text in {"openai", "grok"}:
+        return text
+    return "openai"
 
 
 class RegisterRequest(BaseModel):
@@ -44,6 +53,11 @@ class ChatRequest(BaseModel):
     session_id: int | None = None
     provider: Provider = "openai"
 
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_chat_provider(cls, value: object) -> str:
+        return _normalize_provider_value(value)
+
 
 class ChatResponse(BaseModel):
     text: str
@@ -70,6 +84,11 @@ class ImageRequest(BaseModel):
     aspect_ratio: ImageAspectRatio = "1:1"
     quality: ImageQuality = "1k"
     provider: Provider = "openai"
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_image_provider(cls, value: object) -> str:
+        return _normalize_provider_value(value)
 
 
 class ImageResponse(BaseModel):

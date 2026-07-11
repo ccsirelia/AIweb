@@ -236,7 +236,22 @@ FRONTEND_PORT=5008 BACKEND_PORT=8008 ./aiweb-start.sh
 { "message": "你好，请介绍一下你自己", "session_id": null, "provider": "openai" }
 ```
 
-也支持 `multipart/form-data` 上传附件字段 `files`。
+也支持 `multipart/form-data` 上传附件字段 `files`。附件处理链路为：
+
+1. 浏览器以 multipart 上传文件；
+2. 后端校验扩展名、文件大小并保存附件记录；
+3. `.docx`、`.pdf`、`.xlsx`、`.pptx` 和纯文本类文件在后端提取可读正文；
+4. 提取后的正文随用户问题一起发送给聊天模型；
+5. 前端通过聊天任务状态轮询读取并展示 AI 处理结果。
+
+Office/PDF 解析依赖包含在 `backend/requirements.txt` 中。更新依赖后需要重新执行：
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+`.docx` 文件如果加密、损坏或仅包含扫描图片而没有可读文字，接口会直接返回明确的正文提取错误，不再把只有文件名的空附件发送给 AI。旧版二进制 `.doc` 不支持正文提取，请先转换为 `.docx`。
 
 `POST /api/chat`
 
@@ -290,7 +305,7 @@ FRONTEND_PORT=5008 BACKEND_PORT=8008 ./aiweb-start.sh
 - `image_jobs`: 异步生图任务（pending/running/completed/failed）
 - `token_usage_records`: Token 用量统计
 - `user_accounts`: `id`, `username`, `name`, `email`, `password_hash`, `role`, `is_active`, `created_at`
-- `app_settings`: OpenAI / Gork 运行时配置
+- `app_settings`: OpenAI / Grok 运行时配置
 
 后续迁移 PostgreSQL 时，把 `DATABASE_URL` 改成 PostgreSQL 连接串，并引入 Alembic 做迁移即可。
 

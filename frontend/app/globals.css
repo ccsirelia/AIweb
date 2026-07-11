@@ -47,7 +47,34 @@ select {
 }
 
 ::selection {
-  background: rgba(91, 124, 255, 0.22);
+  background: rgba(91, 124, 255, 0.35);
+  color: inherit;
+}
+
+/* User bubbles are blue-on-white; default selection is too faint. */
+.chat-user-bubble ::selection,
+.chat-user-bubble::selection {
+  background: rgba(15, 23, 42, 0.55);
+  color: #ffffff;
+}
+
+.dark .chat-user-bubble ::selection,
+.dark .chat-user-bubble::selection {
+  background: rgba(255, 255, 255, 0.88);
+  color: #1a1a1a;
+}
+
+/* Assistant cards: clearer selection against light/dark panels. */
+.chat-assistant-bubble ::selection,
+.chat-assistant-bubble::selection {
+  background: rgba(91, 124, 255, 0.38);
+  color: inherit;
+}
+
+.dark .chat-assistant-bubble ::selection,
+.dark .chat-assistant-bubble::selection {
+  background: rgba(91, 124, 255, 0.5);
+  color: #f8fafc;
 }
 
 .glass-panel {
@@ -56,13 +83,27 @@ select {
   backdrop-filter: blur(22px);
 }
 
+.soft-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.28) transparent;
+}
+
 .soft-scrollbar::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
+}
+
+.soft-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .soft-scrollbar::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: rgba(128, 128, 128, 0.24);
+}
+
+.soft-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(91, 124, 255, 0.35);
 }
 
 .markdown-body {

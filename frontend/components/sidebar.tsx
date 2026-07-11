@@ -32,8 +32,8 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="sticky top-0 z-20 flex h-auto w-full flex-col border-b border-border bg-card/76 px-4 py-4 backdrop-blur-2xl lg:h-screen lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
-      <Link href="/" className="mb-4 flex items-center gap-3 lg:mb-8">
+    <aside className="sticky top-0 z-20 flex h-auto w-full flex-col border-b border-border bg-card/76 px-3 py-3 backdrop-blur-2xl lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+      <Link href="/" className="mb-3 flex items-center gap-3 lg:mb-7">
         <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[#1A1A1A] text-white shadow-soft dark:bg-white dark:text-[#1A1A1A]">
           <Sparkles className="h-5 w-5" />
         </div>
@@ -43,7 +43,7 @@ export function Sidebar() {
         </div>
       </Link>
 
-      <nav className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+      <nav className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1.5 lg:overflow-visible">
         {navItems.map((item) => {
           const active = pathname === item.href;
           const Icon = item.icon;
@@ -52,7 +52,7 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex min-w-fit items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium text-muted-foreground transition-all hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]",
+                "flex min-w-fit items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]",
                 active && "bg-[#5B7CFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#5B7CFF] hover:text-white"
               )}
             >
