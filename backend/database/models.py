@@ -51,6 +51,7 @@ class ChatJob(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -79,6 +80,25 @@ class ImageRecord(Base):
     size: Mapped[str] = mapped_column(String(40), nullable=False)
     image_base64: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+
+
+class ImageJob(Base):
+    __tablename__ = "image_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    style: Mapped[str] = mapped_column(String(40), nullable=False)
+    size: Mapped[str] = mapped_column(String(40), nullable=False)
+    aspect_ratio: Mapped[str] = mapped_column(String(20), nullable=False, default="1:1")
+    quality: Mapped[str] = mapped_column(String(20), nullable=False, default="1k")
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    image_record_id: Mapped[int | None] = mapped_column(ForeignKey("image_records.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AppSetting(Base):

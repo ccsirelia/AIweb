@@ -6,7 +6,15 @@ import { Download, ImageIcon, Loader2, RefreshCcw, WandSparkles } from "lucide-r
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
-import { generateImage, getAuthToken, getRecentImages, type ImageRecord, type Provider } from "@/lib/api";
+import {
+  createImageJob,
+  getAuthToken,
+  getImageJob,
+  getRecentImages,
+  type ImageJob,
+  type ImageRecord,
+  type Provider
+} from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,6 +39,22 @@ type AspectRatio = keyof typeof presetSizes;
 type Quality = keyof (typeof presetSizes)["1:1"];
 
 const IMAGE_PROVIDER_KEY = "aiweb_image_provider";
+const PENDING_IMAGE_JOBS_KEY = "aiweb_pending_image_jobs";
+
+function readPendingImageJobs(): ImageJob[] {
+  if (typeof window === "undefined") return [];
+  const raw = localStorage.getItem(PENDING_IMAGE_JOBS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as ImageJob[];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingImageJobs(jobs: ImageJob[]) {
+  localStorage.setItem(PENDING_IMAGE_JOBS_KEY, JSON.stringify(jobs));
+}
 
 function validateImage2Size(width: number, height: number) {
   if (!Number.isInteger(width) || !Number.isInteger(height)) return "宽高必须是整数。";
@@ -63,6 +87,7 @@ export function ImageStudio() {
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
+  const [pendingJobs, setPendingJobs] = useState<ImageJob[]>([]);
   const router = useRouter();
 
   const isGork = provider === "gork";
@@ -87,8 +112,56 @@ export function ImageStudio() {
         setCustomSizeEnabled(false);
       }
     }
+    const storedJobs = readPendingImageJobs();
+    setPendingJobs(storedJobs);
+    setLoading(storedJobs.length > 0);
     refreshImages();
   }, [router]);
+
+  useEffect(() => {
+    if (pendingJobs.length === 0) return;
+    const timer = window.setInterval(() => {
+      pollPendingJobs();
+    }, 1800);
+    pollPendingJobs();
+    return () => window.clearInterval(timer);
+  }, [pendingJobs.length]);
+
+  async function pollPendingJobs() {
+    const jobs = readPendingImageJobs();
+    if (jobs.length === 0) {
+      setPendingJobs([]);
+      setLoading(false);
+      return;
+    }
+
+    const nextJobs: ImageJob[] = [];
+    let completedImage = "";
+    let shouldRefresh = false;
+    for (const job of jobs) {
+      try {
+        const latest = await getImageJob(job.id);
+        if (latest.status === "completed") {
+          shouldRefresh = true;
+          if (latest.image_base64) completedImage = latest.image_base64;
+        } else if (latest.status === "failed") {
+          toast.error(latest.error || "图片生成失败。");
+        } else {
+          nextJobs.push(latest);
+        }
+      } catch {
+        nextJobs.push(job);
+      }
+    }
+    writePendingImageJobs(nextJobs);
+    setPendingJobs(nextJobs);
+    setLoading(nextJobs.length > 0);
+    if (completedImage) setImage(completedImage);
+    if (shouldRefresh) {
+      await refreshImages();
+      if (completedImage) toast.success("图片生成完成。");
+    }
+  }
 
   function changeProvider(value: Provider) {
     setProvider(value);
@@ -104,7 +177,9 @@ export function ImageStudio() {
     try {
       const records = await getRecentImages();
       setRecentImages(records);
-      if (!image && records[0]) setImage(records[0].image_base64);
+      if (!image && records[0] && readPendingImageJobs().length === 0) {
+        setImage(records[0].image_base64);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片历史加载失败。");
     } finally {
@@ -127,7 +202,7 @@ export function ImageStudio() {
     const nextQuality = isGork && quality === "4k" ? "2k" : quality;
     setLoading(true);
     try {
-      const result = await generateImage({
+      const job = await createImageJob({
         prompt: trimmed,
         style,
         size: isGork ? presetSizes[aspectRatio][nextQuality] : size,
@@ -135,13 +210,12 @@ export function ImageStudio() {
         quality: isGork ? nextQuality : customSizeEnabled ? "custom" : quality,
         provider
       });
-      setImage(result.image_base64);
-      await refreshImages();
-      toast.success("图片生成完成。");
+      const jobs = [...readPendingImageJobs().filter((item) => item.id !== job.id), job];
+      writePendingImageJobs(jobs);
+      setPendingJobs(jobs);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片生成失败。");
-    } finally {
-      setLoading(false);
+      setLoading(readPendingImageJobs().length > 0);
     }
   }
 
@@ -183,7 +257,7 @@ export function ImageStudio() {
             </div>
             <div>
               <h2 className="text-lg font-semibold">AI Image Studio</h2>
-              <p className="text-sm text-muted-foreground">选择通道生成商业级视觉草图。</p>
+              <p className="text-sm text-muted-foreground">选择通道生成商业级视觉草图（异步任务队列）。</p>
             </div>
           </div>
 
@@ -315,8 +389,11 @@ export function ImageStudio() {
 
             <Button className="w-full" disabled={loading || !prompt.trim() || Boolean(customSizeError)} onClick={() => createImage()}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-              生成图片
+              {loading ? "生成中…" : "生成图片"}
             </Button>
+            {pendingJobs.length > 0 && (
+              <p className="text-center text-xs text-muted-foreground">队列中有 {pendingJobs.length} 个任务，完成后会自动更新预览。</p>
+            )}
           </div>
         </Card>
 
@@ -340,6 +417,7 @@ export function ImageStudio() {
                 <div className="aspect-square animate-pulse rounded-3xl bg-[#5B7CFF]/10" />
                 <div className="h-3 animate-pulse rounded-full bg-muted" />
                 <div className="h-3 w-2/3 animate-pulse rounded-full bg-muted" />
+                <p className="text-center text-sm text-muted-foreground">任务已提交，后台生成中…</p>
               </div>
             ) : image ? (
               <motion.img

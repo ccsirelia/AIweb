@@ -56,6 +56,7 @@ class ChatJobOut(BaseModel):
     status: str
     error: str
     created_at: datetime
+    started_at: datetime | None = None
     completed_at: datetime | None = None
 
     class Config:
@@ -73,6 +74,24 @@ class ImageRequest(BaseModel):
 
 class ImageResponse(BaseModel):
     image_base64: str
+
+
+class ImageJobOut(BaseModel):
+    id: int
+    status: str
+    error: str
+    prompt: str
+    style: str
+    size: str
+    provider: str
+    image_record_id: int | None = None
+    image_base64: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
 
 
 class ChatRecordOut(BaseModel):

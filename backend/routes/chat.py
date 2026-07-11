@@ -1,14 +1,13 @@
-import base64
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from database.models import ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, UserAccount, now_utc
-from database.session import SessionLocal, get_db
+from database.session import get_db
 from models.schemas import ChatJobOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
 from services.auth_service import current_user
 from services.openai_service import OpenAIService, OpenAIServiceError
@@ -92,27 +91,6 @@ def extract_text(filename: str, content_type: str, data: bytes) -> str | None:
     return sample.decode("utf-8", errors="ignore")
 
 
-def attachment_payloads(db: Session, message_id: int) -> list[dict[str, str | int | None]]:
-    attachments = db.query(ChatAttachment).filter(ChatAttachment.message_id == message_id).order_by(ChatAttachment.created_at).all()
-    payloads: list[dict[str, str | int | None]] = []
-    for item in attachments:
-        payload: dict[str, str | int | None] = {
-            "filename": item.filename,
-            "content_type": item.content_type,
-            "file_path": item.file_path,
-            "file_size": item.file_size,
-            "text_content": item.text_content,
-        }
-        if item.content_type.startswith("image/"):
-            try:
-                image_data = Path(item.file_path).read_bytes()
-                payload["data_url"] = f"data:{item.content_type};base64,{base64.b64encode(image_data).decode('ascii')}"
-            except OSError:
-                payload["data_url"] = None
-        payloads.append(payload)
-    return payloads
-
-
 async def parse_chat_job_request(request: Request) -> tuple[str, int | None, str, list[UploadFile]]:
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
@@ -170,64 +148,6 @@ async def save_attachments(
     return names
 
 
-def run_chat_job(job_id: int) -> None:
-    db = SessionLocal()
-    try:
-        job = db.get(ChatJob, job_id)
-        if job is None:
-            return
-        job.status = "running"
-        db.commit()
-
-        user_message = db.get(ChatMessage, job.user_message_id)
-        session = db.get(ChatSession, job.session_id)
-        if user_message is None or session is None:
-            job.status = "failed"
-            job.error = "Chat message not found."
-            job.completed_at = now_utc()
-            db.commit()
-            return
-
-        previous_messages = (
-            db.query(ChatMessage)
-            .filter(ChatMessage.session_id == job.session_id, ChatMessage.id < job.user_message_id)
-            .order_by(ChatMessage.created_at)
-            .limit(20)
-            .all()
-        )
-        history = [{"role": item.role, "content": item.content} for item in previous_messages if item.role in {"user", "assistant"}]
-
-        service = OpenAIService(provider=job.provider)
-        result = service.chat(user_message.content, history=history, attachments=attachment_payloads(db, user_message.id))
-        text = str(result["text"])
-        db.add(ChatMessage(session_id=job.session_id, role="assistant", content=text))
-        db.add(ChatRecord(user_id=job.user_id, user_message=user_message.content, ai_response=text))
-        record_token_usage(
-            db,
-            user_id=job.user_id,
-            source="chat",
-            provider=job.provider,
-            model=str(result.get("model") or service.text_model),
-            prompt_tokens=int(result.get("prompt_tokens") or 0),
-            completion_tokens=int(result.get("completion_tokens") or 0),
-            total_tokens=int(result.get("total_tokens") or 0),
-        )
-        session.updated_at = now_utc()
-        job.status = "completed"
-        job.completed_at = now_utc()
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        job = db.get(ChatJob, job_id)
-        if job is not None:
-            job.status = "failed"
-            job.error = str(exc)
-            job.completed_at = now_utc()
-            db.commit()
-    finally:
-        db.close()
-
-
 @router.get("/chat/sessions", response_model=list[ChatSessionOut])
 def chat_sessions(db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> list[ChatSessionOut]:
     return db.query(ChatSession).filter(ChatSession.user_id == user.id).order_by(desc(ChatSession.updated_at)).limit(10).all()
@@ -282,10 +202,10 @@ def chat_job(job_id: int, db: Session = Depends(get_db), user: UserAccount = Dep
 @router.post("/chat/jobs", response_model=ChatJobOut, dependencies=[Depends(rate_limiter)])
 async def create_chat_job(
     request: Request,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ChatJobOut:
+    """Enqueue a chat job for the in-process worker. Does not call the model inline."""
     user_message, session_id, provider, files = await parse_chat_job_request(request)
     if not user_message:
         raise HTTPException(status_code=422, detail="Please enter a message.")
@@ -309,11 +229,16 @@ async def create_chat_job(
     if attachment_names:
         message.content = f"{user_message}\n\nAttachments: {', '.join(attachment_names)}"
 
-    job = ChatJob(user_id=user.id, session_id=session.id, user_message_id=message.id, provider=provider, status="pending")
+    job = ChatJob(
+        user_id=user.id,
+        session_id=session.id,
+        user_message_id=message.id,
+        provider=provider,
+        status="pending",
+    )
     db.add(job)
     db.commit()
     db.refresh(job)
-    background_tasks.add_task(run_chat_job, job.id)
     return job
 
 
@@ -323,6 +248,7 @@ def chat(
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ChatResponse:
+    """Synchronous chat (compatibility). Prefer POST /api/chat/jobs for production UI."""
     user_message = payload.message.strip()
     session = db.get(ChatSession, payload.session_id) if payload.session_id else None
     if session is not None and session.user_id != user.id:

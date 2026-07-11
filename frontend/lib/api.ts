@@ -26,6 +26,7 @@ export type ChatJob = {
   status: "pending" | "running" | "completed" | "failed";
   error: string;
   created_at: string;
+  started_at?: string | null;
   completed_at: string | null;
 };
 
@@ -36,6 +37,23 @@ export type ImageRecord = {
   size: string;
   image_base64: string;
   created_at: string;
+};
+
+export type Provider = "openai" | "gork";
+
+export type ImageJob = {
+  id: number;
+  status: "pending" | "running" | "completed" | "failed";
+  error: string;
+  prompt: string;
+  style: string;
+  size: string;
+  provider: Provider;
+  image_record_id: number | null;
+  image_base64: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
 };
 
 export type User = {
@@ -64,8 +82,6 @@ export type AccountProfile = {
   token_usage: TokenUsageSummary;
   recent_images: ImageRecord[];
 };
-
-export type Provider = "openai" | "gork";
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8008").replace(/\/$/, "");
 
@@ -195,6 +211,24 @@ export function generateImage(payload: { prompt: string; style: string; size: st
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function createImageJob(payload: {
+  prompt: string;
+  style: string;
+  size: string;
+  aspect_ratio?: string;
+  quality?: string;
+  provider?: Provider;
+}) {
+  return request<ImageJob>("/api/image/jobs", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getImageJob(jobId: number) {
+  return request<ImageJob>(`/api/image/jobs/${jobId}`);
 }
 
 export function getHistory() {

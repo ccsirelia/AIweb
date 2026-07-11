@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from database.models import ImageRecord, UserAccount
+from database.models import ImageJob, ImageRecord, UserAccount
 from database.session import get_db
-from models.schemas import ImageRecordOut, ImageRequest, ImageResponse
+from models.schemas import ImageJobOut, ImageRecordOut, ImageRequest, ImageResponse
 from services.auth_service import current_user
+from services.image_job_service import public_image_error
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
 from services.token_usage_service import record_token_usage
@@ -61,9 +62,67 @@ def resolve_gork_size(payload: ImageRequest) -> str:
     return f"{payload.aspect_ratio} {payload.quality}"
 
 
+def image_job_to_out(job: ImageJob, db: Session) -> ImageJobOut:
+    image_base64: str | None = None
+    if job.status == "completed" and job.image_record_id:
+        record = db.get(ImageRecord, job.image_record_id)
+        if record is not None:
+            image_base64 = record.image_base64
+    return ImageJobOut(
+        id=job.id,
+        status=job.status,
+        error=job.error,
+        prompt=job.prompt,
+        style=job.style,
+        size=job.size,
+        provider=job.provider,
+        image_record_id=job.image_record_id,
+        image_base64=image_base64,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+    )
+
+
 @router.get("/images", response_model=list[ImageRecordOut])
 def images(db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> list[ImageRecordOut]:
     return db.query(ImageRecord).filter(ImageRecord.user_id == user.id).order_by(desc(ImageRecord.created_at)).limit(10).all()
+
+
+@router.get("/image/jobs/{job_id}", response_model=ImageJobOut)
+def image_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> ImageJobOut:
+    job = db.get(ImageJob, job_id)
+    if job is None or job.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Image job not found.")
+    return image_job_to_out(job, db)
+
+
+@router.post("/image/jobs", response_model=ImageJobOut, dependencies=[Depends(rate_limiter)])
+def create_image_job(
+    payload: ImageRequest,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> ImageJobOut:
+    """Enqueue an image job for the in-process worker. Returns immediately."""
+    resolved_size = resolve_gork_size(payload) if payload.provider == "gork" else resolve_openai_size(payload)
+    job = ImageJob(
+        user_id=user.id,
+        prompt=payload.prompt.strip(),
+        style=payload.style,
+        size=resolved_size,
+        aspect_ratio=payload.aspect_ratio,
+        quality=payload.quality,
+        provider=payload.provider,
+        status="pending",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return image_job_to_out(job, db)
 
 
 @router.post("/image", response_model=ImageResponse, dependencies=[Depends(rate_limiter)])
@@ -72,6 +131,7 @@ def image(
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ImageResponse:
+    """Synchronous image generation (compatibility). Prefer POST /api/image/jobs."""
     resolved_size = resolve_gork_size(payload) if payload.provider == "gork" else resolve_openai_size(payload)
     if payload.provider == "openai":
         payload.size = resolved_size
@@ -103,9 +163,4 @@ def image(
         return ImageResponse(image_base64=image_base64)
     except OpenAIServiceError as exc:
         db.rollback()
-        message = str(exc)
-        if payload.provider == "gork" and "400" in message:
-            message = "Gork 生图请求被上游拒绝。请确认后台 Gork 生图模型配置正确，并且前端只选择 1k 或 2k。"
-        elif "size" in message.lower():
-            message = "当前模型或中转不支持该原生分辨率。系统已尽量使用合法底图尺寸并输出目标尺寸；如果仍失败，请检查后台生图模型配置。"
-        raise HTTPException(status_code=502, detail=message) from exc
+        raise HTTPException(status_code=502, detail=public_image_error(exc, payload.provider)) from exc

@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -6,10 +7,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database.init_db import init_db
 from routes import account, admin, auth, chat, history, image
+from services.job_worker import job_worker
 
 load_dotenv()
 
-app = FastAPI(title="AIWeb API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    job_worker.start()
+    try:
+        yield
+    finally:
+        job_worker.stop(wait=False)
+
+
+app = FastAPI(title="AIWeb API", version="1.0.0", lifespan=lifespan)
 
 frontend_origins = [
     origin.strip()
@@ -28,11 +41,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
 
 
 @app.get("/api/health")
