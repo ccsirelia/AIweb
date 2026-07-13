@@ -1,10 +1,16 @@
 import re
+import uuid
+from io import BytesIO
+from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc
+from fastapi import APIRouter, Depends, HTTPException, Request
+from PIL import Image, UnidentifiedImageError
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile
 
-from database.models import ImageJob, ImageRecord, UserAccount
+from database.models import ImageJob, ImageJobReference, ImageRecord, UserAccount
 from database.session import get_db
 from models.schemas import ImageJobOut, ImageRecordOut, ImageRequest, ImageResponse
 from services.auth_service import current_user
@@ -16,6 +22,11 @@ from services.token_usage_service import record_token_usage
 
 router = APIRouter(prefix="/api", tags=["image"])
 rate_limiter = InMemoryRateLimiter()
+REFERENCE_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads" / "image-references"
+MAX_REFERENCE_IMAGES = 6
+MAX_REFERENCE_IMAGE_SIZE = 10 * 1024 * 1024
+MAX_REFERENCE_PIXELS = 40_000_000
+ALLOWED_REFERENCE_FORMATS = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 
 PRESET_SIZES = {
     "16:9": {"1k": "1920x1024", "2k": "2560x1440", "4k": "3840x2160"},
@@ -77,6 +88,8 @@ def image_job_to_out(job: ImageJob, db: Session) -> ImageJobOut:
         style=job.style,
         size=job.size,
         provider=job.provider,
+        mode=job.mode,
+        reference_count=db.query(func.count(ImageJobReference.id)).filter(ImageJobReference.job_id == job.id).scalar() or 0,
         image_record_id=job.image_record_id,
         image_base64=image_base64,
         created_at=job.created_at,
@@ -102,14 +115,83 @@ def image_job(
     return image_job_to_out(job, db)
 
 
+def collect_reference_images(form: Any) -> list[UploadFile]:
+    images: list[UploadFile] = []
+    for key, value in form.multi_items():
+        if key not in {"reference_images", "images", "files"}:
+            continue
+        if not isinstance(value, UploadFile) and not (getattr(value, "filename", None) and hasattr(value, "read")):
+            continue
+        if str(getattr(value, "filename", "") or "").strip():
+            images.append(value)
+    return images
+
+
+async def parse_image_job_request(request: Request) -> tuple[ImageRequest, str, list[UploadFile]]:
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" not in content_type:
+        return ImageRequest.model_validate(await request.json()), "text_to_image", []
+
+    form = await request.form()
+    payload = ImageRequest.model_validate(
+        {
+            "prompt": str(form.get("prompt") or ""),
+            "style": str(form.get("style") or "写实"),
+            "size": str(form.get("size") or "1024x1024"),
+            "aspect_ratio": str(form.get("aspect_ratio") or "1:1"),
+            "quality": str(form.get("quality") or "1k"),
+            "provider": str(form.get("provider") or "openai"),
+        }
+    )
+    mode = str(form.get("mode") or "image_to_image").strip()
+    if mode not in {"text_to_image", "image_to_image"}:
+        raise HTTPException(status_code=422, detail="不支持的生图模式。")
+    return payload, mode, collect_reference_images(form)
+
+
+async def read_reference_image(upload: UploadFile) -> tuple[bytes, str]:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_REFERENCE_IMAGE_SIZE:
+            raise HTTPException(status_code=413, detail=f"参考图 {upload.filename} 超过 10MB。")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    try:
+        with Image.open(BytesIO(data)) as source:
+            image_format = str(source.format or "").upper()
+            if image_format not in ALLOWED_REFERENCE_FORMATS:
+                raise HTTPException(status_code=415, detail="参考图仅支持 PNG、JPG/JPEG 和 WebP。")
+            if source.width * source.height > MAX_REFERENCE_PIXELS:
+                raise HTTPException(status_code=413, detail=f"参考图 {upload.filename} 像素尺寸过大。")
+            source.verify()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=415, detail=f"参考图 {upload.filename} 不是有效图片。") from exc
+    return data, ALLOWED_REFERENCE_FORMATS[image_format]
+
+
 @router.post("/image/jobs", response_model=ImageJobOut, dependencies=[Depends(rate_limiter)])
-def create_image_job(
-    payload: ImageRequest,
+async def create_image_job(
+    request: Request,
     db: Session = Depends(get_db),
     user: UserAccount = Depends(current_user),
 ) -> ImageJobOut:
     """Enqueue an image job for the in-process worker. Returns immediately."""
+    payload, mode, reference_images = await parse_image_job_request(request)
+    if mode == "image_to_image" and not reference_images:
+        raise HTTPException(status_code=422, detail="图生图模式至少需要上传一张参考图。")
+    if mode == "text_to_image" and reference_images:
+        raise HTTPException(status_code=422, detail="文生图模式不能携带参考图。")
+    if len(reference_images) > MAX_REFERENCE_IMAGES:
+        raise HTTPException(status_code=422, detail=f"一次最多上传 {MAX_REFERENCE_IMAGES} 张参考图。")
+
     provider = normalize_provider(payload.provider)
+    if provider == "grok" and len(reference_images) > 3:
+        raise HTTPException(status_code=422, detail="Grok 官方接口一次最多支持 3 张参考图。")
     resolved_size = resolve_grok_size(payload) if provider == "grok" else resolve_openai_size(payload)
     job = ImageJob(
         user_id=user.id,
@@ -119,11 +201,39 @@ def create_image_job(
         aspect_ratio=payload.aspect_ratio,
         quality=payload.quality,
         provider=provider,
+        mode=mode,
         status="pending",
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    stored_paths: list[Path] = []
+    try:
+        db.add(job)
+        db.flush()
+        if reference_images:
+            REFERENCE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        for index, upload in enumerate(reference_images):
+            data, content_type = await read_reference_image(upload)
+            suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[content_type]
+            stored_path = REFERENCE_UPLOAD_DIR / f"{job.id}_{uuid.uuid4().hex}{suffix}"
+            stored_path.write_bytes(data)
+            stored_paths.append(stored_path)
+            db.add(
+                ImageJobReference(
+                    job_id=job.id,
+                    user_id=user.id,
+                    filename=Path(str(upload.filename or f"reference-{index + 1}{suffix}")).name[:255],
+                    content_type=content_type,
+                    file_path=str(stored_path),
+                    file_size=len(data),
+                    sort_order=index,
+                )
+            )
+        db.commit()
+        db.refresh(job)
+    except Exception:
+        db.rollback()
+        for stored_path in stored_paths:
+            stored_path.unlink(missing_ok=True)
+        raise
     return image_job_to_out(job, db)
 
 
@@ -149,6 +259,8 @@ def image(
                 prompt=payload.prompt.strip(),
                 style=payload.style,
                 size=resolved_size,
+                mode="text_to_image",
+                reference_count=0,
                 image_base64=image_base64,
             )
         )

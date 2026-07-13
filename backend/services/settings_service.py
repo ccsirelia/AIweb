@@ -88,7 +88,7 @@ def get_runtime_config(provider: str = "openai") -> tuple[str | None, str]:
                 get_setting(db, SETTING_GROK_BASE_URL, "").strip()
                 or os.getenv("GROK_BASE_URL", "").strip()
                 or os.getenv("GORK_BASE_URL", "").strip()
-                or None
+                or "https://api.x.ai/v1"
             )
             api_key = (
                 get_setting(db, SETTING_GROK_API_KEY, "").strip()
@@ -116,7 +116,7 @@ def get_model_config(provider: str = "openai") -> tuple[str, str]:
                 get_setting(db, SETTING_GROK_IMAGE_MODEL, "").strip()
                 or os.getenv("GROK_IMAGE_MODEL", "")
                 or os.getenv("GORK_IMAGE_MODEL", "")
-                or "grok-2-image"
+                or "grok-imagine-image-quality"
             )
             return text_model, image_model
 

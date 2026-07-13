@@ -1,5 +1,5 @@
 # AIWeb Studio
-一个前后端分离的 AI 创作网站，支持用户注册登录、GPT 文字对话、AI 生图、历史记录、主题切换和 SQLite 存储。聊天页支持最近 10 条会话、继续原会话和新对话；生图页支持最近 10 张持久图库预览和原图下载。
+一个前后端分离的 AI 创作网站，支持用户注册登录、GPT 文字对话、AI 文生图/图生图、历史记录、主题切换和 SQLite 存储。聊天页支持区分 OpenAI / Grok 通道并选择管理员启用的具体模型版本，也支持最近 10 条会话、继续原会话和新对话；生图页支持 OpenAI 最多 6 张、Grok 最多 3 张参考图，提供异步生成、最近 10 张持久图库预览和原图下载。
 
 ## 项目结构
 
@@ -19,7 +19,10 @@ AIweb/
       auth_service.py
       openai_service.py
       job_worker.py
+      chat_context_service.py
       chat_job_service.py
+      chat_model_service.py
+      document_extract.py
       image_job_service.py
       rate_limit.py
       settings_service.py
@@ -72,6 +75,10 @@ copy .env.example .env
 OPENAI_API_KEY=sk-your-openai-api-key
 OPENAI_TEXT_MODEL=gpt-4.1-mini
 OPENAI_IMAGE_MODEL=gpt-image-1
+GROK_API_KEY=xai-your-api-key
+GROK_BASE_URL=https://api.x.ai/v1
+GROK_TEXT_MODEL=grok-3-mini
+GROK_IMAGE_MODEL=grok-imagine-image-quality
 DATABASE_URL=sqlite:///./aiweb.db
 FRONTEND_ORIGIN=http://localhost:3000
 RATE_LIMIT_PER_MINUTE=30
@@ -128,7 +135,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - 登录成功后写入 HttpOnly Cookie：
   - `aiweb_admin_session`：管理员会话
   - `aiweb_admin_csrf`：CSRF token
-- 所有管理台表单 POST（保存配置、增删用户、启停用户、退出登录）都必须携带匹配的 `csrf_token`
+- 所有管理台表单 POST（保存配置、管理聊天模型、增删/启停用户、退出登录）都必须携带匹配的 `csrf_token`
 - 会话有效期由 `ADMIN_SESSION_TTL_SECONDS` 控制，默认 8 小时
 - HTTPS 生产环境请设置 `ADMIN_COOKIE_SECURE=true`
 
@@ -146,8 +153,11 @@ UPDATE user_accounts SET role = 'admin' WHERE username = 'your-admin-username';
 管理控制台支持：
 
 - 设置 OpenAI 兼容 API 地址，例如 `https://api.openai.com/v1`
+- 设置 xAI 官方 Grok 地址 `https://api.x.ai/v1`，推荐生图模型 `grok-imagine-image-quality`
 - 设置后端使用的 API Key，留空时回退到 `.env`
-- 设置文字模型和生图模型，留空时回退到 `.env`
+- 设置兼容默认文字模型和生图模型，留空时回退到 `.env`
+- 按 OpenAI / Grok 分别添加聊天模型，设置显示名称、排序和默认模型
+- 启用、停用或删除聊天模型；每个通道始终保留至少一个启用模型
 - 添加、启用、禁用、删除用户记录
 - 管理员登录 / 退出
 - 表单 CSRF 防护
@@ -233,16 +243,18 @@ FRONTEND_PORT=5008 BACKEND_PORT=8008 ./aiweb-start.sh
 入队异步聊天任务，立即返回 job；前端轮询 `GET /api/chat/jobs/{job_id}`。
 
 ```json
-{ "message": "你好，请介绍一下你自己", "session_id": null, "provider": "openai" }
+{ "message": "你好，请介绍一下你自己", "session_id": null, "provider": "openai", "model": "gpt-4.1-mini" }
 ```
 
-也支持 `multipart/form-data` 上传附件字段 `files`。附件处理链路为：
+`provider` 与 `model` 会在入队时校验并固化到任务；管理员之后修改默认模型不会影响已经排队的任务。未传 `model` 时使用该通道在模型目录中的默认模型。也支持 `multipart/form-data` 上传附件字段 `files`，此时同样可以传 `provider` 和 `model`。附件处理链路为：
 
 1. 浏览器以 multipart 上传文件；
 2. 后端校验扩展名、文件大小并保存附件记录；
 3. `.docx`、`.pdf`、`.xlsx`、`.pptx` 和纯文本类文件在后端提取可读正文；
 4. 提取后的正文随用户问题一起发送给聊天模型；
 5. 前端通过聊天任务状态轮询读取并展示 AI 处理结果。
+
+每次模型调用会按消息 ID 选择当前会话最近 20 条用户/助手消息，并在发送前恢复为时间正序。长会话不会再因为正序 `LIMIT` 而持续使用最早 20 条、丢失最新上下文。
 
 Office/PDF 解析依赖包含在 `backend/requirements.txt` 中。更新依赖后需要重新执行：
 
@@ -255,7 +267,11 @@ cd backend
 
 `POST /api/chat`
 
-同步聊天（兼容保留）；生产 UI 使用 `/api/chat/jobs`。
+同步聊天（兼容保留）；同样支持 `provider` 和 `model`，生产 UI 使用 `/api/chat/jobs`。
+
+`GET /api/chat/models`
+
+返回当前登录用户可选的启用模型，按 OpenAI / Grok、默认状态和后台排序排列。聊天页只显示当前通道的模型，并分别记住两个通道上次选择的版本。
 
 `GET /api/chat/sessions`
 
@@ -269,6 +285,8 @@ cd backend
 
 入队异步生图任务，立即返回 job；前端轮询 `GET /api/image/jobs/{job_id}`。完成后响应可含 `image_base64` 与 `image_record_id`。
 
+文生图继续使用 JSON：
+
 ```json
 {
   "prompt": "一只穿宇航服的橘猫，赛博朋克风格",
@@ -279,6 +297,40 @@ cd backend
   "provider": "openai"
 }
 ```
+
+图生图使用 `multipart/form-data`，字段包含上述参数、`mode=image_to_image`，以及可重复的 `reference_images` 文件字段。OpenAI 通道最多 6 张，Grok 官方通道最多 3 张；每张不超过 10MB，仅支持 PNG、JPG/JPEG、WebP。服务端会校验真实图片格式和像素尺寸。上传文件保存在 `backend/uploads/image-references/`，任务会将全部参考图按上传顺序传给图片编辑模型。
+
+```text
+prompt=保留人物特征，将场景改为雨夜霓虹街道
+style=摄影
+size=1024x1024
+aspect_ratio=1:1
+quality=1k
+provider=openai
+mode=image_to_image
+reference_images=<image-1.jpg>
+reference_images=<image-2.png>
+```
+
+Grok 图生图调用 `POST {GROK_BASE_URL}/images/edits`，本地参考图编码成 base64 data URI，并根据上游自动选择协议：
+
+- 直连 `api.x.ai`：使用官方 `url` JSON；单图写入 `image`，多图写入有序 `images` 数组。
+- Sub2API / 自定义中转：使用其 Grok Media Bridge 实际解析的 `image_url` JSON。首次请求会携带画幅、清晰度和 base64 返回参数；若中转的 OAuth 上游返回 400，会自动以最小兼容字段重试。
+- Sub2 临时可用性错误（HTTP 429/500/502/503/504）：自动按 5、15、30 秒退避，最多请求 4 次，并优先遵循上游 `Retry-After`（最大等待 60 秒）。请求始终发送到配置的 `GROK_BASE_URL`，不会绕过 Sub2。
+
+OpenAI SDK 的 `images.edit()` 是 multipart 格式，不能直接用于 xAI 官方编辑接口。文生图不受上述协议分流影响。
+
+Sub2 返回 `Service temporarily unavailable` 通常表示当前 API Key 所属分组没有可调度的 Grok 账号：可能是账号池为空、并发已满、额度/限流暂停或账号运行时不可用。客户端退避可以覆盖短暂波动；若连续 4 次仍失败，需要在 Sub2 管理端检查该分组的 Grok 账号、模型映射、额度和并发状态。
+
+推荐的官方配置：
+
+```env
+GROK_API_KEY=xai-your-api-key
+GROK_BASE_URL=https://api.x.ai/v1
+GROK_IMAGE_MODEL=grok-imagine-image-quality
+```
+
+如果官方 xAI 地址仍残留旧默认模型名 `grok-2-image`，运行时会自动切换到 `grok-imagine-image-quality`；自定义中转地址不会被自动改写。
 
 `POST /api/image`
 
@@ -299,10 +351,12 @@ cd backend
 - `chat_records`: `id`, `user_message`, `ai_response`, `created_at`
 - `chat_sessions`: `id`, `user_id`, `title`, `created_at`, `updated_at`
 - `chat_messages`: `id`, `session_id`, `role`, `content`, `created_at`
-- `chat_jobs`: `id`, `user_id`, `session_id`, `user_message_id`, `provider`, `status`, `error`, `created_at`, `started_at`, `completed_at`
+- `chat_jobs`: `id`, `user_id`, `session_id`, `user_message_id`, `provider`, `model`, `status`, `error`, `created_at`, `started_at`, `completed_at`
+- `chat_models`: OpenAI / Grok 聊天模型目录、显示名称、启停状态、默认状态与排序
 - `chat_attachments`: 聊天附件元数据与本地路径
-- `image_records`: `id`, `user_id`, `prompt`, `style`, `size`, `image_base64`, `created_at`
-- `image_jobs`: 异步生图任务（pending/running/completed/failed）
+- `image_records`: `id`, `user_id`, `prompt`, `style`, `size`, `mode`, `reference_count`, `image_base64`, `created_at`
+- `image_jobs`: 异步生图任务（含 `mode`，状态为 pending/running/completed/failed）
+- `image_job_references`: 图生图参考文件元数据、顺序与本地路径
 - `token_usage_records`: Token 用量统计
 - `user_accounts`: `id`, `username`, `name`, `email`, `password_hash`, `role`, `is_active`, `created_at`
 - `app_settings`: OpenAI / Grok 运行时配置

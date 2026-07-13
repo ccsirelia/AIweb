@@ -11,8 +11,10 @@ from starlette.datastructures import UploadFile
 
 from database.models import ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, UserAccount, now_utc
 from database.session import get_db
-from models.schemas import ChatJobOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
+from models.schemas import ChatJobOut, ChatModelOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
 from services.auth_service import current_user
+from services.chat_context_service import load_recent_chat_history
+from services.chat_model_service import list_active_chat_models, resolve_chat_model
 from services.document_extract import DEFAULT_MAX_CHARS, extract_document_text
 from services.openai_service import OpenAIService, OpenAIServiceError
 from services.rate_limit import InMemoryRateLimiter
@@ -112,20 +114,21 @@ def collect_upload_files(form: Any) -> list[UploadFile]:
     return files
 
 
-async def parse_chat_job_request(request: Request) -> tuple[str, int | None, str, list[UploadFile]]:
+async def parse_chat_job_request(request: Request) -> tuple[str, int | None, str, str | None, list[UploadFile]]:
     content_type = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in content_type:
         form = await request.form()
         message = str(form.get("message") or "").strip()
         raw_session_id = str(form.get("session_id") or "").strip()
         provider = normalize_provider(str(form.get("provider") or "openai"))
+        model = str(form.get("model") or "").strip() or None
         files = collect_upload_files(form)
         session_id = int(raw_session_id) if raw_session_id.isdigit() else None
         logger.info("Parsed multipart chat job: message_len=%s files=%s", len(message), len(files))
-        return message, session_id, provider, files
+        return message, session_id, provider, model, files
 
     payload = ChatRequest.model_validate(await request.json())
-    return payload.message.strip(), payload.session_id, normalize_provider(payload.provider), []
+    return payload.message.strip(), payload.session_id, normalize_provider(payload.provider), payload.model, []
 
 
 async def save_attachments(
@@ -220,6 +223,11 @@ def chat_sessions(db: Session = Depends(get_db), user: UserAccount = Depends(cur
     return db.query(ChatSession).filter(ChatSession.user_id == user.id).order_by(desc(ChatSession.updated_at)).limit(10).all()
 
 
+@router.get("/chat/models", response_model=list[ChatModelOut])
+def chat_models(db: Session = Depends(get_db), _user: UserAccount = Depends(current_user)) -> list[ChatModelOut]:
+    return list_active_chat_models(db)
+
+
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
 def chat_session(
     session_id: int,
@@ -273,13 +281,17 @@ async def create_chat_job(
     user: UserAccount = Depends(current_user),
 ) -> ChatJobOut:
     """Enqueue a chat job for the in-process worker. Does not call the model inline."""
-    user_message, session_id, provider, files = await parse_chat_job_request(request)
+    user_message, session_id, provider, requested_model, files = await parse_chat_job_request(request)
     if not user_message and not files:
         raise HTTPException(status_code=422, detail="Please enter a message or upload an attachment.")
     if not user_message and files:
         user_message = "请分析这些附件。"
     if len(user_message) > 4000:
         raise HTTPException(status_code=422, detail="Input cannot exceed 4000 characters.")
+    try:
+        selected_model = resolve_chat_model(db, provider, requested_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     session = db.get(ChatSession, session_id) if session_id else None
     if session is not None and session.user_id != user.id:
@@ -307,6 +319,7 @@ async def create_chat_job(
         session_id=session.id,
         user_message_id=message.id,
         provider=provider,
+        model=selected_model,
         status="pending",
     )
     db.add(job)
@@ -331,17 +344,15 @@ def chat(
         db.add(session)
         db.flush()
 
-    previous_messages = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session.id)
-        .order_by(ChatMessage.created_at)
-        .limit(20)
-        .all()
-    )
-    history = [{"role": item.role, "content": item.content} for item in previous_messages if item.role in {"user", "assistant"}]
+    history = load_recent_chat_history(db, session.id)
+    provider = normalize_provider(payload.provider)
+    try:
+        selected_model = resolve_chat_model(db, provider, payload.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        service = OpenAIService(provider=payload.provider)
+        service = OpenAIService(provider=provider, text_model=selected_model)
         result = service.chat(user_message, history=history)
         text = str(result["text"])
         db.add(ChatMessage(session_id=session.id, role="user", content=user_message))
@@ -351,7 +362,7 @@ def chat(
             db,
             user_id=user.id,
             source="chat",
-            provider=payload.provider,
+            provider=provider,
             model=str(result.get("model") or service.text_model),
             prompt_tokens=int(result.get("prompt_tokens") or 0),
             completion_tokens=int(result.get("completion_tokens") or 0),

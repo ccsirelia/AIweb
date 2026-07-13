@@ -1,8 +1,10 @@
 import base64
 import logging
+import time
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from dotenv import load_dotenv
@@ -54,16 +56,29 @@ IMAGE_MIME = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+GROK_IMAGE_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+GROK_IMAGE_RETRY_DELAYS_SECONDS = (5, 15, 30)
 
 
 class OpenAIService:
-    def __init__(self, provider: str = "openai") -> None:
+    def __init__(self, provider: str = "openai", text_model: str | None = None) -> None:
         self.provider = normalize_provider(provider)
         base_url, api_key = get_runtime_config(self.provider)
         if not api_key:
             raise OpenAIServiceError(f"{self.provider.upper()} API key is not configured")
+        self.base_url = (base_url or "").rstrip("/")
+        self.api_key = api_key
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.text_model, self.image_model = get_model_config(self.provider)
+        if text_model and text_model.strip():
+            self.text_model = text_model.strip()
+        if (
+            self.provider == "grok"
+            and self.base_url.lower().startswith("https://api.x.ai/")
+            and self.image_model == "grok-2-image"
+        ):
+            logger.warning("Replacing legacy xAI image model grok-2-image with grok-imagine-image-quality")
+            self.image_model = "grok-imagine-image-quality"
 
     def _usage_payload(self, response: object, *, fallback_text: str = "") -> dict[str, int]:
         usage = extract_usage_dict(response)
@@ -402,15 +417,169 @@ class OpenAIService:
             resized.save(output, format="PNG", optimize=True)
         return base64.b64encode(output.getvalue()).decode("ascii")
 
-    def generate_image(self, payload: ImageRequest) -> dict[str, Any]:
+    def _grok_edit_image(self, prompt: str, payload: ImageRequest, references: list[dict[str, Any]]) -> dict[str, Any]:
+        """Call xAI's JSON-only image edit endpoint.
+
+        xAI deliberately does not accept the multipart body emitted by the
+        OpenAI SDK's images.edit method. Reference images are therefore sent
+        as base64 data URIs in an application/json request.
+        """
+        if not 1 <= len(references) <= 3:
+            raise OpenAIServiceError("Grok image editing requires 1 to 3 reference images")
+
+        data_uris = [
+            f"data:{item['content_type']};base64,{base64.b64encode(bytes(item['data'])).decode('ascii')}"
+            for item in references
+        ]
+        hostname = (urlsplit(self.base_url).hostname or "").lower()
+        is_official_xai = hostname == "api.x.ai" or hostname.endswith(".api.x.ai")
+        fallback_request_body: dict[str, Any] | None = None
+
+        if is_official_xai:
+            images = [{"type": "image_url", "url": data_uri} for data_uri in data_uris]
+            request_body: dict[str, Any] = {
+                "model": self.image_model,
+                "prompt": prompt,
+                "resolution": payload.quality,
+                "response_format": "b64_json",
+            }
+            if len(images) == 1:
+                request_body["image"] = images[0]
+            else:
+                request_body["images"] = images
+                request_body["aspect_ratio"] = payload.aspect_ratio
+        else:
+            # Sub2API's Grok media bridge parses `image_url` (not xAI's
+            # documented `url`) and its OAuth upstream rejects several
+            # optional REST fields. Send the minimal shape that its own
+            # multipart-to-JSON adapter produces.
+            images = [{"image_url": data_uri} for data_uri in data_uris]
+            request_body = {
+                "model": self.image_model,
+                "prompt": prompt,
+                "image": images[0],
+            }
+            if len(images) > 1:
+                request_body["images"] = images
+            fallback_request_body = dict(request_body)
+            request_body["resolution"] = payload.quality
+            request_body["response_format"] = "b64_json"
+            if len(images) > 1:
+                request_body["aspect_ratio"] = payload.aspect_ratio
+
+        endpoint = f"{self.base_url}/images/edits"
+        used_gateway_fallback = False
+
+        def post_with_transient_retry(body: dict[str, Any]) -> tuple[httpx.Response, int]:
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    response = httpx.post(
+                        endpoint,
+                        headers=request_headers,
+                        json=body,
+                        timeout=180,
+                    )
+                except httpx.HTTPError as exc:
+                    if attempts > len(GROK_IMAGE_RETRY_DELAYS_SECONDS):
+                        raise OpenAIServiceError(
+                            f"Grok image edit request failed after {attempts} attempts: {exc}"
+                        ) from exc
+                    delay = GROK_IMAGE_RETRY_DELAYS_SECONDS[attempts - 1]
+                    logger.warning(
+                        "Grok image edit transport error; retrying in %ss (attempt %s/%s): %s",
+                        delay,
+                        attempts,
+                        len(GROK_IMAGE_RETRY_DELAYS_SECONDS) + 1,
+                        exc,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                if response.status_code not in GROK_IMAGE_RETRYABLE_STATUSES:
+                    return response, attempts
+                if attempts > len(GROK_IMAGE_RETRY_DELAYS_SECONDS):
+                    return response, attempts
+
+                retry_after = str(response.headers.get("Retry-After") or "").strip()
+                delay = int(retry_after) if retry_after.isdigit() else GROK_IMAGE_RETRY_DELAYS_SECONDS[attempts - 1]
+                delay = max(1, min(delay, 60))
+                logger.warning(
+                    "Grok image edit returned HTTP %s; retrying in %ss (attempt %s/%s)",
+                    response.status_code,
+                    delay,
+                    attempts,
+                    len(GROK_IMAGE_RETRY_DELAYS_SECONDS) + 1,
+                )
+                time.sleep(delay)
+
+        try:
+            request_headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            response, attempts = post_with_transient_retry(request_body)
+            if response.status_code == 400 and fallback_request_body is not None:
+                logger.warning("Grok gateway rejected optional edit fields; retrying with minimal Sub2-compatible body")
+                used_gateway_fallback = True
+                response, attempts = post_with_transient_retry(fallback_request_body)
+        except httpx.HTTPError as exc:
+            raise OpenAIServiceError(f"Grok image edit request failed: {exc}") from exc
+
+        if response.is_error:
+            try:
+                error_payload = response.json()
+                detail = error_payload.get("error", error_payload) if isinstance(error_payload, dict) else error_payload
+                if isinstance(detail, dict):
+                    detail = detail.get("message") or detail.get("detail") or str(detail)
+            except ValueError:
+                detail = response.text
+            fallback_note = " after Sub2 compatibility retry" if used_gateway_fallback else ""
+            attempts_note = f" after {attempts} attempts" if attempts > 1 else ""
+            raise OpenAIServiceError(
+                f"Grok image edit failed{fallback_note}{attempts_note} ({response.status_code}): {str(detail)[:500]}"
+            )
+
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise OpenAIServiceError("Grok image edit returned invalid JSON") from exc
+        if not isinstance(result, dict):
+            raise OpenAIServiceError("Grok image edit returned an invalid response")
+        return result
+
+    def generate_image(self, payload: ImageRequest, reference_images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         style_direction = STYLE_PROMPTS.get(payload.style, STYLE_PROMPTS["\u5199\u5b9e"])
         final_prompt = (
             f"{payload.prompt}\n"
             f"Style direction: {style_direction}\n"
             f"Target composition: {payload.size} pixels, aspect ratio {payload.aspect_ratio}."
         )
+        references = reference_images or []
+        if references:
+            final_prompt += (
+                "\nUse all supplied reference images as visual context. Preserve the requested subjects, "
+                "identity, products, composition, or style where relevant, and apply the user's editing instruction."
+            )
         try:
-            if self.provider == "grok":
+            if references:
+                image_files = [
+                    (str(item["filename"]), bytes(item["data"]), str(item["content_type"]))
+                    for item in references
+                ]
+                if self.provider == "grok":
+                    result = self._grok_edit_image(final_prompt, payload, references)
+                else:
+                    result = self.client.images.edit(
+                        model=self.image_model,
+                        image=image_files,
+                        prompt=final_prompt,
+                        size=self._openai_generation_size(payload.size),
+                        input_fidelity="high",
+                        n=1,
+                    )
+            elif self.provider == "grok":
                 result = self.client.images.generate(
                     model=self.image_model,
                     prompt=final_prompt,
@@ -429,7 +598,16 @@ class OpenAIService:
                     n=1,
                 )
 
-            image_base64 = self._extract_image_base64(result)
+            if isinstance(result, dict):
+                data = result.get("data") or []
+                first = data[0] if data and isinstance(data[0], dict) else {}
+                image_base64 = str(first.get("b64_json") or "")
+                if not image_base64 and first.get("url"):
+                    image_response = httpx.get(str(first["url"]), timeout=60)
+                    image_response.raise_for_status()
+                    image_base64 = base64.b64encode(image_response.content).decode("ascii")
+            else:
+                image_base64 = self._extract_image_base64(result)
             if not image_base64:
                 raise OpenAIServiceError("OpenAI returned an empty image")
             if self.provider == "openai":

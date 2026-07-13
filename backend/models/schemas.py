@@ -52,6 +52,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     session_id: int | None = None
     provider: Provider = "openai"
+    model: str | None = Field(None, max_length=160)
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -69,9 +70,22 @@ class ChatJobOut(BaseModel):
     session_id: int
     status: str
     error: str
+    provider: str
+    model: str
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatModelOut(BaseModel):
+    id: int
+    provider: str
+    model_id: str
+    display_name: str
+    is_default: bool
 
     class Config:
         from_attributes = True
@@ -103,6 +117,8 @@ class ImageJobOut(BaseModel):
     style: str
     size: str
     provider: str
+    mode: str = "text_to_image"
+    reference_count: int = 0
     image_record_id: int | None = None
     image_base64: str | None = None
     created_at: datetime
@@ -154,6 +170,8 @@ class ImageRecordOut(BaseModel):
     prompt: str
     style: str
     size: str
+    mode: str = "text_to_image"
+    reference_count: int = 0
     image_base64: str
     created_at: datetime
 

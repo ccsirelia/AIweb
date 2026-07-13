@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from database.models import ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, now_utc
 from database.session import SessionLocal
+from services.chat_context_service import load_recent_chat_history
+from services.chat_model_service import resolve_chat_model
 from services.document_extract import extract_document_text
 from services.openai_service import IMAGE_EXTENSIONS, IMAGE_MIME, OpenAIService, OpenAIServiceError
 from services.settings_service import normalize_provider
@@ -104,18 +106,11 @@ def run_chat_job(job_id: int) -> None:
             db.commit()
             return
 
-        previous_messages = (
-            db.query(ChatMessage)
-            .filter(ChatMessage.session_id == job.session_id, ChatMessage.id < job.user_message_id)
-            .order_by(ChatMessage.created_at)
-            .limit(20)
-            .all()
+        history = load_recent_chat_history(
+            db,
+            job.session_id,
+            before_message_id=job.user_message_id,
         )
-        history = [
-            {"role": item.role, "content": item.content}
-            for item in previous_messages
-            if item.role in {"user", "assistant"}
-        ]
 
         # Prefer the raw user text without the "Attachments: ..." suffix when
         # real attachment payloads are available for the model.
@@ -140,7 +135,8 @@ def run_chat_job(job_id: int) -> None:
                 sum(1 for item in attachments if isinstance(item.get("data_url"), str)),
             )
         provider = normalize_provider(job.provider)
-        service = OpenAIService(provider=provider)
+        selected_model = (job.model or "").strip() or resolve_chat_model(db, provider)
+        service = OpenAIService(provider=provider, text_model=selected_model)
         result = service.chat(user_text, history=history, attachments=attachments or None)
         text = str(result["text"]).strip()
         if not text:
@@ -159,6 +155,7 @@ def run_chat_job(job_id: int) -> None:
             total_tokens=int(result.get("total_tokens") or 0),
         )
         job.provider = provider
+        job.model = selected_model
         session.updated_at = now_utc()
         job.status = "completed"
         job.error = ""

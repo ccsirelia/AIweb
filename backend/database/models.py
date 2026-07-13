@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.session import Base
@@ -48,11 +48,27 @@ class ChatJob(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     user_message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="", index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatModel(Base):
+    __tablename__ = "chat_models"
+    __table_args__ = (UniqueConstraint("provider", "model_id", name="uq_chat_models_provider_model_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
 class ChatAttachment(Base):
@@ -78,6 +94,8 @@ class ImageRecord(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     style: Mapped[str] = mapped_column(String(40), nullable=False)
     size: Mapped[str] = mapped_column(String(40), nullable=False)
+    mode: Mapped[str] = mapped_column(String(30), nullable=False, default="text_to_image", index=True)
+    reference_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     image_base64: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
 
@@ -93,12 +111,27 @@ class ImageJob(Base):
     aspect_ratio: Mapped[str] = mapped_column(String(20), nullable=False, default="1:1")
     quality: Mapped[str] = mapped_column(String(20), nullable=False, default="1k")
     provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    mode: Mapped[str] = mapped_column(String(30), nullable=False, default="text_to_image", index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     image_record_id: Mapped[int | None] = mapped_column(ForeignKey("image_records.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImageJobReference(Base):
+    __tablename__ = "image_job_references"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("image_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
 
 
 class AppSetting(Base):
@@ -130,7 +163,7 @@ class TokenUsageRecord(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
-    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)

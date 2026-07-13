@@ -9,7 +9,19 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { toast } from "sonner";
 
-import { createChatJob, deleteChatSession, getAuthToken, getChatJob, getChatSession, getChatSessions, type ChatJob, type ChatSession, type Provider } from "@/lib/api";
+import {
+  createChatJob,
+  deleteChatSession,
+  getAuthToken,
+  getChatJob,
+  getChatModels,
+  getChatSession,
+  getChatSessions,
+  type ChatJob,
+  type ChatModel,
+  type ChatSession,
+  type Provider
+} from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,6 +41,7 @@ type ParsedAssistantContent = {
 const ACTIVE_SESSION_KEY = "aiweb_active_chat_session_id";
 const PENDING_JOBS_KEY = "aiweb_pending_chat_jobs";
 const CHAT_PROVIDER_KEY = "aiweb_chat_provider";
+const CHAT_MODEL_KEY_PREFIX = "aiweb_chat_model_";
 const FILE_ACCEPT = "image/*,.txt,.md,.csv,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.py,.js,.jsx,.ts,.tsx,.html,.css,.xml,.yaml,.yml";
 const providers: { label: string; value: Provider }[] = [
   { label: "OpenAI", value: "openai" },
@@ -110,8 +123,21 @@ export function ChatPanel() {
   const [pendingJobs, setPendingJobs] = useState<ChatJob[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [provider, setProvider] = useState<Provider>("openai");
+  const [chatModels, setChatModels] = useState<ChatModel[]>([]);
+  const [model, setModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
   const router = useRouter();
   const lastUserMessage = useMemo(() => [...messages].reverse().find((item) => item.role === "user")?.content, [messages]);
+  const availableModels = useMemo(() => chatModels.filter((item) => item.provider === provider), [chatModels, provider]);
+  const activePendingJob = useMemo(
+    () => pendingJobs.find((job) => job.session_id === activeSessionId),
+    [activeSessionId, pendingJobs]
+  );
+  const respondingProvider = activePendingJob?.provider ?? provider;
+  const respondingModelId = activePendingJob?.model ?? model;
+  const respondingModel = chatModels.find(
+    (item) => item.provider === respondingProvider && item.model_id === respondingModelId
+  );
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -129,11 +155,28 @@ export function ChatPanel() {
     const storedSessionId = Number(localStorage.getItem(ACTIVE_SESSION_KEY) || "");
     const storedJobs = readPendingJobs();
     setPendingJobs(storedJobs);
+    refreshChatModels();
     refreshSessions();
     if (storedSessionId) {
       openSession(storedSessionId);
     }
   }, [router]);
+
+  useEffect(() => {
+    if (modelsLoading) return;
+    if (availableModels.length === 0) {
+      setModel("");
+      return;
+    }
+
+    const storedModel = localStorage.getItem(`${CHAT_MODEL_KEY_PREFIX}${provider}`) ?? "";
+    const nextModel =
+      availableModels.find((item) => item.model_id === storedModel)?.model_id ??
+      availableModels.find((item) => item.is_default)?.model_id ??
+      availableModels[0].model_id;
+    localStorage.setItem(`${CHAT_MODEL_KEY_PREFIX}${provider}`, nextModel);
+    setModel(nextModel);
+  }, [availableModels, modelsLoading, provider]);
 
   useEffect(() => {
     if (pendingJobs.length === 0) return;
@@ -189,6 +232,17 @@ export function ChatPanel() {
     }
   }
 
+  async function refreshChatModels() {
+    setModelsLoading(true);
+    try {
+      setChatModels(await getChatModels());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "模型列表加载失败，将使用通道默认模型。");
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
   async function openSession(sessionId: number, showLoading = true) {
     if (showLoading) setLoading(true);
     try {
@@ -209,6 +263,20 @@ export function ChatPanel() {
   function changeProvider(value: Provider) {
     setProvider(value);
     localStorage.setItem(CHAT_PROVIDER_KEY, value);
+    const providerModels = chatModels.filter((item) => item.provider === value);
+    const storedModel = localStorage.getItem(`${CHAT_MODEL_KEY_PREFIX}${value}`) ?? "";
+    const nextModel =
+      providerModels.find((item) => item.model_id === storedModel)?.model_id ??
+      providerModels.find((item) => item.is_default)?.model_id ??
+      providerModels[0]?.model_id ??
+      "";
+    setModel(nextModel);
+    if (nextModel) localStorage.setItem(`${CHAT_MODEL_KEY_PREFIX}${value}`, nextModel);
+  }
+
+  function changeModel(value: string) {
+    setModel(value);
+    if (value) localStorage.setItem(`${CHAT_MODEL_KEY_PREFIX}${provider}`, value);
   }
 
   function startNewChat() {
@@ -284,7 +352,7 @@ export function ChatPanel() {
     const attachmentText = files.length ? `\n\n附件：${files.map((file) => file.name).join(", ")}` : "";
     setMessages((prev) => [...prev, { role: "user", content: `${fallbackMessage}${attachmentText}` }]);
     try {
-      const job = await createChatJob(fallbackMessage, activeSessionId, files, provider);
+      const job = await createChatJob(fallbackMessage, activeSessionId, files, provider, model || undefined);
       setActiveSessionId(job.session_id);
       localStorage.setItem(ACTIVE_SESSION_KEY, String(job.session_id));
       const jobs = [...readPendingJobs().filter((item) => item.id !== job.id), job];
@@ -335,12 +403,12 @@ export function ChatPanel() {
       {/* Fixed viewport height so only the message list scrolls, not the whole page. */}
       <div className="grid h-[calc(100dvh-7.25rem)] min-h-[520px] gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3.5 sm:px-6">
+          <div className="flex shrink-0 flex-col items-start gap-3 border-b border-border px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">GPT 文字对话</h2>
               <p className="mt-0.5 truncate text-sm text-muted-foreground">OpenAI / Grok · Markdown · 公式 · 附件分析</p>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:justify-end">
               <div className="flex rounded-xl border border-border bg-background/70 p-1">
                 {providers.map((item) => (
                   <button
@@ -355,6 +423,26 @@ export function ChatPanel() {
                   </button>
                 ))}
               </div>
+              <select
+                aria-label={`${provider === "grok" ? "Grok" : "OpenAI"} 模型版本`}
+                title={availableModels.find((item) => item.model_id === model)?.model_id ?? "使用通道默认模型"}
+                value={model}
+                disabled={modelsLoading || availableModels.length === 0}
+                onChange={(event) => changeModel(event.target.value)}
+                className="h-10 min-w-[150px] max-w-[220px] flex-1 rounded-xl border border-border bg-background/70 px-3 text-xs font-semibold outline-none transition focus:border-[#5B7CFF] focus:ring-2 focus:ring-[#5B7CFF]/15 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
+              >
+                {modelsLoading ? (
+                  <option value="">正在加载模型...</option>
+                ) : availableModels.length === 0 ? (
+                  <option value="">通道默认模型</option>
+                ) : (
+                  availableModels.map((item) => (
+                    <option key={item.id} value={item.model_id}>
+                      {item.display_name}{item.is_default ? "（默认）" : ""}
+                    </option>
+                  ))
+                )}
+              </select>
               <Button variant="secondary" size="sm" onClick={startNewChat}>
                 <Plus className="h-4 w-4" />
                 新对话
@@ -403,7 +491,8 @@ export function ChatPanel() {
                 <div className="flex w-full justify-start">
                   <div className="inline-flex items-center gap-3 rounded-2xl border border-border bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
                     <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                    AI 正在通过 {provider === "grok" ? "Grok" : "OpenAI"} 通道组织回复...
+                    AI 正在通过 {respondingProvider === "grok" ? "Grok" : "OpenAI"}
+                    {respondingModelId ? ` · ${respondingModel?.display_name ?? respondingModelId}` : ""} 组织回复...
                   </div>
                 </div>
               )}

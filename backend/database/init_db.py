@@ -8,9 +8,11 @@ from database.models import (
     ChatAttachment,
     ChatJob,
     ChatMessage,
+    ChatModel,
     ChatRecord,
     ChatSession,
     ImageJob,
+    ImageJobReference,
     ImageRecord,
     TokenUsageRecord,
     UserAccount,
@@ -68,6 +70,17 @@ def migrate_sqlite_schema() -> None:
         if "user_id" not in image_columns:
             _run_sql("ALTER TABLE image_records ADD COLUMN user_id INTEGER")
             _run_sql("CREATE INDEX IF NOT EXISTS ix_image_records_user_id ON image_records (user_id)")
+        if "mode" not in image_columns:
+            _run_sql("ALTER TABLE image_records ADD COLUMN mode VARCHAR(30) NOT NULL DEFAULT 'text_to_image'")
+            _run_sql("CREATE INDEX IF NOT EXISTS ix_image_records_mode ON image_records (mode)")
+        if "reference_count" not in image_columns:
+            _run_sql("ALTER TABLE image_records ADD COLUMN reference_count INTEGER NOT NULL DEFAULT 0")
+
+    if _table_exists("image_jobs"):
+        image_job_columns = _columns("image_jobs")
+        if "mode" not in image_job_columns:
+            _run_sql("ALTER TABLE image_jobs ADD COLUMN mode VARCHAR(30) NOT NULL DEFAULT 'text_to_image'")
+            _run_sql("CREATE INDEX IF NOT EXISTS ix_image_jobs_mode ON image_jobs (mode)")
 
     if _table_exists("chat_jobs"):
         job_columns = _columns("chat_jobs")
@@ -76,6 +89,9 @@ def migrate_sqlite_schema() -> None:
             _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_jobs_provider ON chat_jobs (provider)")
         if "started_at" not in job_columns:
             _run_sql("ALTER TABLE chat_jobs ADD COLUMN started_at DATETIME")
+        if "model" not in job_columns:
+            _run_sql("ALTER TABLE chat_jobs ADD COLUMN model VARCHAR(160) NOT NULL DEFAULT ''")
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_jobs_model ON chat_jobs (model)")
 
     # Rename legacy provider misspelling gork → grok in job/usage tables.
     if _table_exists("chat_jobs"):
@@ -90,9 +106,11 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_sqlite_schema()
     try:
+        from services.chat_model_service import ensure_default_chat_models
         from services.settings_service import migrate_gork_settings
 
         migrate_gork_settings()
+        ensure_default_chat_models()
     except Exception:
         # Settings migration is best-effort; app should still start.
         pass

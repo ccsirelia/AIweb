@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, ImageIcon, Loader2, RefreshCcw, WandSparkles } from "lucide-react";
+import { Download, ImageIcon, ImagePlus, Images, Loader2, RefreshCcw, Type, Upload, WandSparkles, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
@@ -37,6 +37,8 @@ const presetSizes = {
 
 type AspectRatio = keyof typeof presetSizes;
 type Quality = keyof (typeof presetSizes)["1:1"];
+type ImageMode = "text_to_image" | "image_to_image";
+type ReferenceImage = { id: string; file: File; preview: string };
 
 const IMAGE_PROVIDER_KEY = "aiweb_image_provider";
 const PENDING_IMAGE_JOBS_KEY = "aiweb_pending_image_jobs";
@@ -75,6 +77,7 @@ function downloadBase64(imageBase64: string, name = `aiweb-image-${Date.now()}.p
 }
 
 export function ImageStudio() {
+  const [mode, setMode] = useState<ImageMode>("text_to_image");
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("写实");
   const [provider, setProvider] = useState<Provider>("openai");
@@ -88,9 +91,13 @@ export function ImageStudio() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
   const [pendingJobs, setPendingJobs] = useState<ImageJob[]>([]);
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
+  const referenceImagesRef = useRef<ReferenceImage[]>([]);
+  const [draggingReferences, setDraggingReferences] = useState(false);
   const router = useRouter();
 
   const isGrok = provider === "grok";
+  const maxReferenceImages = isGrok ? 3 : 6;
   const visibleQualities = isGrok ? grokQualities : openaiQualities;
   const size = useMemo(() => {
     if (isGrok) return `${aspectRatio} ${quality === "4k" ? "2k" : quality}`;
@@ -98,6 +105,40 @@ export function ImageStudio() {
     return presetSizes[aspectRatio][quality];
   }, [aspectRatio, customHeight, customSizeEnabled, customWidth, isGrok, quality]);
   const customSizeError = !isGrok && customSizeEnabled ? validateImage2Size(customWidth, customHeight) : "";
+
+  useEffect(() => {
+    referenceImagesRef.current = referenceImages;
+  }, [referenceImages]);
+
+  useEffect(() => () => referenceImagesRef.current.forEach((item) => URL.revokeObjectURL(item.preview)), []);
+
+  function addReferenceImages(files: File[]) {
+    const validTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    const accepted = files.filter((file) => validTypes.has(file.type) && file.size <= 10 * 1024 * 1024);
+    if (accepted.length !== files.length) toast.error("仅支持 10MB 以内的 PNG、JPG/JPEG 或 WebP 图片。");
+    const remaining = maxReferenceImages - referenceImages.length;
+    if (remaining <= 0) {
+      toast.error(`当前通道一次最多上传 ${maxReferenceImages} 张参考图。`);
+      return;
+    }
+    if (accepted.length > remaining) toast.error(`当前通道最多 ${maxReferenceImages} 张，已保留前 ${remaining} 张。`);
+    setReferenceImages((current) => [
+      ...current,
+      ...accepted.slice(0, remaining).map((file) => ({
+        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+        file,
+        preview: URL.createObjectURL(file)
+      }))
+    ]);
+  }
+
+  function removeReferenceImage(id: string) {
+    setReferenceImages((current) => {
+      const removed = current.find((item) => item.id === id);
+      if (removed) URL.revokeObjectURL(removed.preview);
+      return current.filter((item) => item.id !== id);
+    });
+  }
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -174,6 +215,11 @@ export function ImageStudio() {
     if (value === "grok") {
       setQuality((current) => (current === "4k" ? "2k" : current));
       setCustomSizeEnabled(false);
+      if (referenceImages.length > 3) {
+        referenceImages.slice(3).forEach((item) => URL.revokeObjectURL(item.preview));
+        setReferenceImages((current) => current.slice(0, 3));
+        toast.info("Grok 官方接口最多支持 3 张参考图，已保留前 3 张。");
+      }
     }
   }
 
@@ -203,6 +249,10 @@ export function ImageStudio() {
       toast.error(customSizeError);
       return;
     }
+    if (mode === "image_to_image" && referenceImages.length === 0) {
+      toast.error("请先上传至少一张参考图。");
+      return;
+    }
 
     const nextQuality = isGrok && quality === "4k" ? "2k" : quality;
     setLoading(true);
@@ -213,7 +263,9 @@ export function ImageStudio() {
         size: isGrok ? presetSizes[aspectRatio][nextQuality] : size,
         aspect_ratio: isGrok ? aspectRatio : customSizeEnabled ? "custom" : aspectRatio,
         quality: isGrok ? nextQuality : customSizeEnabled ? "custom" : quality,
-        provider
+        provider,
+        mode,
+        reference_images: mode === "image_to_image" ? referenceImages.map((item) => item.file) : undefined
       });
       const jobs = [...readPendingImageJobs().filter((item) => item.id !== job.id), job];
       writePendingImageJobs(jobs);
@@ -228,6 +280,7 @@ export function ImageStudio() {
     setImage(record.image_base64);
     setPrompt(record.prompt);
     setStyle(styles.includes(record.style) ? record.style : "写实");
+    setMode(record.mode ?? "text_to_image");
     const grokMatch = record.size.match(/^(16:9|1:1|9:16)\s+(1k|2k)$/);
     if (grokMatch) {
       setProvider("grok");
@@ -266,6 +319,31 @@ export function ImageStudio() {
             </div>
           </div>
 
+          <div className="mt-5 rounded-2xl bg-muted/60 p-1">
+            <div className="grid grid-cols-2 gap-1" aria-label="生图模式">
+              <button
+                onClick={() => setMode("text_to_image")}
+                className={cn(
+                  "flex h-10 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition",
+                  mode === "text_to_image" ? "bg-background text-[#5B7CFF] shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Type className="h-4 w-4" />
+                文生图
+              </button>
+              <button
+                onClick={() => setMode("image_to_image")}
+                className={cn(
+                  "flex h-10 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition",
+                  mode === "image_to_image" ? "bg-background text-[#5B7CFF] shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Images className="h-4 w-4" />
+                图生图
+              </button>
+            </div>
+          </div>
+
           <div className="mt-5">
             <label className="text-sm font-medium">模型通道</label>
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -285,13 +363,81 @@ export function ImageStudio() {
           </div>
 
           <div className="mt-5 flex min-h-0 flex-1 flex-col space-y-4">
+            {mode === "image_to_image" && (
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-sm font-medium">参考图片</label>
+                  <span className="text-xs text-muted-foreground">{referenceImages.length}/{maxReferenceImages}</span>
+                </div>
+                <label
+                  className={cn(
+                    "mt-2 block cursor-pointer rounded-2xl border border-dashed p-3 transition",
+                    draggingReferences ? "border-[#5B7CFF] bg-[#5B7CFF]/8" : "border-border bg-background/50 hover:border-[#5B7CFF]/50"
+                  )}
+                  onDragEnter={(event) => { event.preventDefault(); setDraggingReferences(true); }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={(event) => { event.preventDefault(); setDraggingReferences(false); }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDraggingReferences(false);
+                    addReferenceImages(Array.from(event.dataTransfer.files));
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    multiple
+                    className="sr-only"
+                    onChange={(event) => {
+                      addReferenceImages(Array.from(event.target.files ?? []));
+                      event.target.value = "";
+                    }}
+                  />
+                  {referenceImages.length === 0 ? (
+                    <div className="flex min-h-24 flex-col items-center justify-center text-center">
+                      <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
+                        <Upload className="h-4 w-4" />
+                      </div>
+                      <p className="mt-2 text-sm font-medium">点击或拖入多张参考图</p>
+                      <p className="mt-1 text-xs text-muted-foreground">PNG / JPG / WebP，单张不超过 10MB</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-3">
+                      {referenceImages.map((item, index) => (
+                        <div key={item.id} className="group relative aspect-square overflow-hidden rounded-xl border border-border bg-muted">
+                          <img src={item.preview} alt={`参考图 ${index + 1}`} className="h-full w-full object-cover" />
+                          <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] text-white">{index + 1}</span>
+                          <button
+                            type="button"
+                            className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/70 text-white opacity-90 transition hover:bg-red-500"
+                            onClick={(event) => { event.preventDefault(); removeReferenceImage(item.id); }}
+                            aria-label={`移除参考图 ${index + 1}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {referenceImages.length < maxReferenceImages && (
+                        <div className="grid aspect-square place-items-center rounded-xl border border-dashed border-border text-muted-foreground">
+                          <ImagePlus className="h-5 w-5" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </label>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  多图会按顺序共同作为主体、构图和风格参考。{isGrok ? "Grok 官方接口最多 3 张。" : "最多 6 张。"}
+                </p>
+              </div>
+            )}
+
             <div className="flex min-h-0 flex-1 flex-col">
-              <label className="text-sm font-medium">Prompt</label>
+              <label className="text-sm font-medium">{mode === "image_to_image" ? "编辑指令" : "Prompt"}</label>
               <Textarea
                 value={prompt}
                 maxLength={1200}
                 className="mt-2 min-h-[140px] flex-1"
-                placeholder="一只穿宇航服的橘猫，赛博朋克风格，电影感灯光..."
+                placeholder={mode === "image_to_image" ? "例如：保留人物特征，将场景改为雨夜霓虹街道..." : "一只穿宇航服的橘猫，赛博朋克风格，电影感灯光..."}
                 onChange={(event) => setPrompt(event.target.value)}
               />
               <div className="mt-2 text-right text-xs text-muted-foreground">{prompt.length}/1200</div>
@@ -392,9 +538,13 @@ export function ImageStudio() {
               </div>
             )}
 
-            <Button className="w-full" disabled={loading || !prompt.trim() || Boolean(customSizeError)} onClick={() => createImage()}>
+            <Button
+              className="w-full"
+              disabled={loading || !prompt.trim() || Boolean(customSizeError) || (mode === "image_to_image" && referenceImages.length === 0)}
+              onClick={() => createImage()}
+            >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-              {loading ? "生成中…" : "生成图片"}
+              {loading ? "生成中…" : mode === "image_to_image" ? "根据参考图生成" : "生成图片"}
             </Button>
             {pendingJobs.length > 0 && (
               <p className="text-center text-xs text-muted-foreground">队列中有 {pendingJobs.length} 个任务，完成后会自动更新预览。</p>
@@ -479,7 +629,7 @@ export function ImageStudio() {
                       {record.prompt}
                     </button>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {record.style} · {record.size}
+                      {record.mode === "image_to_image" ? `图生图 · ${record.reference_count} 张` : "文生图"} · {record.style} · {record.size}
                     </div>
                     <Button variant="ghost" size="sm" className="mt-1.5 h-8 px-2" onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}>
                       <Download className="h-3.5 w-3.5" />

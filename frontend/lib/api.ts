@@ -25,6 +25,8 @@ export type ChatJob = {
   session_id: number;
   status: "pending" | "running" | "completed" | "failed";
   error: string;
+  provider: Provider;
+  model: string;
   created_at: string;
   started_at?: string | null;
   completed_at: string | null;
@@ -35,11 +37,21 @@ export type ImageRecord = {
   prompt: string;
   style: string;
   size: string;
+  mode: "text_to_image" | "image_to_image";
+  reference_count: number;
   image_base64: string;
   created_at: string;
 };
 
 export type Provider = "openai" | "grok";
+
+export type ChatModel = {
+  id: number;
+  provider: Provider;
+  model_id: string;
+  display_name: string;
+  is_default: boolean;
+};
 
 export type ImageJob = {
   id: number;
@@ -49,6 +61,8 @@ export type ImageJob = {
   style: string;
   size: string;
   provider: Provider;
+  mode: "text_to_image" | "image_to_image";
+  reference_count: number;
   image_record_id: number | null;
   image_base64: string | null;
   created_at: string;
@@ -162,18 +176,19 @@ export function getAccountProfile() {
   return request<AccountProfile>("/api/account/profile");
 }
 
-export function sendChat(message: string, sessionId?: number | null, provider: Provider = "openai") {
+export function sendChat(message: string, sessionId?: number | null, provider: Provider = "openai", model?: string) {
   return request<{ text: string; session_id: number }>("/api/chat", {
     method: "POST",
-    body: JSON.stringify({ message, session_id: sessionId ?? null, provider })
+    body: JSON.stringify({ message, session_id: sessionId ?? null, provider, model: model || null })
   });
 }
 
-export function createChatJob(message: string, sessionId?: number | null, files?: File[], provider: Provider = "openai") {
+export function createChatJob(message: string, sessionId?: number | null, files?: File[], provider: Provider = "openai", model?: string) {
   if (files?.length) {
     const form = new FormData();
     form.append("message", message || "请分析这些附件。");
     form.append("provider", provider);
+    if (model) form.append("model", model);
     if (sessionId != null) form.append("session_id", String(sessionId));
     // Use the same field name the backend expects; include filename for proxies.
     files.forEach((file) => form.append("files", file, file.name));
@@ -185,7 +200,7 @@ export function createChatJob(message: string, sessionId?: number | null, files?
 
   return request<ChatJob>("/api/chat/jobs", {
     method: "POST",
-    body: JSON.stringify({ message, session_id: sessionId ?? null, provider })
+    body: JSON.stringify({ message, session_id: sessionId ?? null, provider, model: model || null })
   });
 }
 
@@ -195,6 +210,10 @@ export function getChatJob(jobId: number) {
 
 export function getChatSessions() {
   return request<ChatSession[]>("/api/chat/sessions");
+}
+
+export function getChatModels() {
+  return request<ChatModel[]>("/api/chat/models");
 }
 
 export function getChatSession(sessionId: number) {
@@ -221,7 +240,24 @@ export function createImageJob(payload: {
   aspect_ratio?: string;
   quality?: string;
   provider?: Provider;
+  mode?: "text_to_image" | "image_to_image";
+  reference_images?: File[];
 }) {
+  if (payload.reference_images?.length) {
+    const form = new FormData();
+    form.append("prompt", payload.prompt);
+    form.append("style", payload.style);
+    form.append("size", payload.size);
+    form.append("aspect_ratio", payload.aspect_ratio ?? "1:1");
+    form.append("quality", payload.quality ?? "1k");
+    form.append("provider", payload.provider ?? "openai");
+    form.append("mode", payload.mode ?? "image_to_image");
+    payload.reference_images.forEach((file) => form.append("reference_images", file, file.name));
+    return request<ImageJob>("/api/image/jobs", {
+      method: "POST",
+      body: form
+    });
+  }
   return request<ImageJob>("/api/image/jobs", {
     method: "POST",
     body: JSON.stringify(payload)

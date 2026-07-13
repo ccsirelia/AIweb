@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
-from database.models import ImageJob, ImageRecord, now_utc
+from database.models import ImageJob, ImageJobReference, ImageRecord, now_utc
 from database.session import SessionLocal
 from models.schemas import ImageRequest
 from services.openai_service import OpenAIService, OpenAIServiceError
@@ -22,6 +23,13 @@ def public_image_error(exc: Exception, provider: str) -> str:
         return GENERIC_IMAGE_ERROR
 
     message = str(exc).strip()
+    if provider == "grok" and any(f"({status})" in message for status in (429, 500, 502, 503, 504)):
+        return (
+            "Sub2 当前没有可用的 Grok 图生图上游，系统已完成自动退避重试。"
+            "请检查 Sub2 分组中的 Grok 账号、模型映射、额度、限流和并发状态后重试。"
+        )
+    if provider == "grok" and message.startswith("Grok image edit failed"):
+        return message[:500]
     if provider == "grok" and "400" in message:
         return "Grok 生图请求被上游拒绝。请确认后台 Grok 生图模型配置正确，并且前端只选择 1k 或 2k。"
     if "size" in message.lower():
@@ -59,8 +67,23 @@ def run_image_job(job_id: int) -> None:
                 payload.quality = parts[1]  # type: ignore[assignment]
                 payload.size = "1024x1024"
 
+        reference_rows = (
+            db.query(ImageJobReference)
+            .filter(ImageJobReference.job_id == job.id)
+            .order_by(ImageJobReference.sort_order.asc(), ImageJobReference.id.asc())
+            .all()
+        )
+        reference_images = [
+            {
+                "filename": reference.filename,
+                "content_type": reference.content_type,
+                "data": Path(reference.file_path).read_bytes(),
+            }
+            for reference in reference_rows
+        ]
+
         service = OpenAIService(provider=provider)
-        result = service.generate_image(payload)
+        result = service.generate_image(payload, reference_images=reference_images)
         image_base64 = str(result["image_base64"])
 
         record = ImageRecord(
@@ -68,6 +91,8 @@ def run_image_job(job_id: int) -> None:
             prompt=job.prompt,
             style=job.style,
             size=job.size,
+            mode=job.mode,
+            reference_count=len(reference_images),
             image_base64=image_base64,
         )
         db.add(record)

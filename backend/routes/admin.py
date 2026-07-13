@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, Request
 
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import desc, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from database.models import UserAccount
+from database.models import ChatModel, UserAccount
 from database.session import get_db
 
 from services.admin_security import (
@@ -21,6 +22,7 @@ from services.admin_security import (
     validate_csrf,
 )
 from services.auth_service import hash_password, verify_password
+from services.chat_model_service import add_legacy_model_to_catalog, set_default_chat_model
 from services.settings_service import (
     SETTING_GROK_API_KEY,
     SETTING_GROK_BASE_URL,
@@ -68,6 +70,15 @@ def attach_csrf_if_needed(request: Request, response: Response, csrf_token: str)
     return response
 
 
+def chat_model_setting_key(provider: str) -> str:
+    return SETTING_GROK_TEXT_MODEL if provider == "grok" else SETTING_OPENAI_TEXT_MODEL
+
+
+def sync_default_chat_model_setting(db: Session, model: ChatModel) -> None:
+    """Keep the legacy provider default in sync with the model catalog."""
+    set_setting(db, chat_model_setting_key(model.provider), model.model_id)
+
+
 def render_provider_card(
     title: str,
     description: str,
@@ -81,6 +92,11 @@ def render_provider_card(
     image_placeholder: str,
     csrf_token: str,
 ) -> str:
+    base_url_hint = (
+        "xAI 官方地址为 https://api.x.ai/v1；Sub2API 等中转会自动使用兼容的 image_url JSON 请求。"
+        if prefix == "grok"
+        else "填写官方或兼容 OpenAI SDK 的 Base URL，一般只填到 /v1。"
+    )
     return f"""
       <section class="card">
         <div class="card-head">
@@ -94,7 +110,7 @@ def render_provider_card(
             <div class="field">
               <label for="{prefix}_base_url">API 地址</label>
               <input id="{prefix}_base_url" name="base_url" value="{escape(base_url)}" placeholder="{escape(base_placeholder)}" />
-              <div class="hint">填写 sub2 或兼容 OpenAI SDK 的 Base URL，一般只填到 /v1。</div>
+              <div class="hint">{escape(base_url_hint)}</div>
             </div>
             <div class="field">
               <label for="{prefix}_api_key">API Key</label>
@@ -102,8 +118,8 @@ def render_provider_card(
               <div class="hint">当前状态：{escape(mask_secret(api_key))}</div>
             </div>
             <div class="field">
-              <label for="{prefix}_text_model">聊天模型</label>
-              <input id="{prefix}_text_model" name="text_model" value="{escape(text_model)}" placeholder="{escape(text_placeholder)}" />
+              <label for="{prefix}_text_model">默认聊天模型（兼容回退）</label>
+              <input id="{prefix}_text_model" name="text_model" maxlength="160" value="{escape(text_model)}" placeholder="{escape(text_placeholder)}" />
             </div>
             <div class="field">
               <label for="{prefix}_image_model">生图模型</label>
@@ -113,6 +129,52 @@ def render_provider_card(
           </form>
         </div>
       </section>
+    """
+
+
+def render_chat_models(models: list[ChatModel], csrf_token: str) -> str:
+    rows: list[str] = []
+    for model in models:
+        provider_label = "OpenAI" if model.provider == "openai" else "Grok"
+        status = "已启用" if model.is_active else "已停用"
+        status_class = "pill ok" if model.is_active else "pill muted"
+        default_badge = '<span class="pill role">默认</span>' if model.is_default else ""
+        default_action = "" if model.is_default else f"""
+          <form method="post" action="/admin/chat-models/{model.id}/default">
+            {csrf_field(csrf_token)}
+            <button class="ghost" type="submit">设为默认</button>
+          </form>
+        """
+        rows.append(
+            f"""
+            <tr>
+              <td><span class="pill role">{provider_label}</span></td>
+              <td><strong>{escape(model.display_name)}</strong><div class="hint model-id">{escape(model.model_id)}</div></td>
+              <td><span class="{status_class}">{status}</span> {default_badge}</td>
+              <td>{model.sort_order}</td>
+              <td class="actions">
+                {default_action}
+                <form method="post" action="/admin/chat-models/{model.id}/toggle">
+                  {csrf_field(csrf_token)}
+                  <button class="ghost" type="submit">{'停用' if model.is_active else '启用'}</button>
+                </form>
+                <form method="post" action="/admin/chat-models/{model.id}/delete">
+                  {csrf_field(csrf_token)}
+                  <button class="danger" type="submit">删除</button>
+                </form>
+              </td>
+            </tr>
+            """
+        )
+    if not rows:
+        return '<div class="empty"><div><h3>暂无聊天模型</h3><p>请先添加 OpenAI 或 Grok 模型。</p></div></div>'
+    return f"""
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>通道</th><th>模型</th><th>状态</th><th>排序</th><th>操作</th></tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
     """
 
 
@@ -322,6 +384,7 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
     grok_image_model = get_setting(db, SETTING_GROK_IMAGE_MODEL, "")
 
     users = db.query(UserAccount).order_by(desc(UserAccount.created_at)).all()
+    chat_models = db.query(ChatModel).order_by(ChatModel.provider.asc(), ChatModel.sort_order.asc(), ChatModel.id.asc()).all()
     message = request.query_params.get("message", "")
     csrf_token = ensure_csrf_token(request)
 
@@ -340,15 +403,15 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
     )
     grok_card = render_provider_card(
         "Grok",
-        "通过 sub2 中转的 Grok 兼容通道配置。前端选择 Grok 时会使用这里的 Key 和模型。",
+        "xAI 官方或兼容通道配置。官方 Grok 图生图要求 JSON Images Edit 接口。",
         "grok",
         grok_base_url,
         grok_api_key,
         grok_text_model,
         grok_image_model,
-        "https://你的-sub2-地址/v1",
-        "grok-3-mini 或 sub2 映射模型名",
-        "grok-2-image 或 sub2 映射模型名",
+        "https://api.x.ai/v1",
+        "grok-3-mini 或兼容模型名",
+        "grok-imagine-image-quality",
         csrf_token,
     )
 
@@ -455,9 +518,14 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
         .ghost, .danger {{ height: 34px; border-radius: 12px; padding: 0 12px; cursor: pointer; border: 1px solid var(--line); background: #fff; font-weight: 750; }}
         .danger {{ color: var(--danger); }}
         .user-form-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr 160px; gap: 12px; }}
+        .model-form-grid {{ display: grid; grid-template-columns: 150px minmax(220px,1.2fr) minmax(180px,1fr) 110px 130px; gap: 12px; }}
+        .model-id {{ margin-top: 4px; overflow-wrap: anywhere; }}
         .empty {{ display: grid; place-items: center; min-height: 180px; text-align: center; color: var(--muted); }}
+        @media (max-width: 1200px) {{
+          .model-form-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        }}
         @media (max-width: 980px) {{
-          .layout, .grid, .user-form-grid {{ grid-template-columns: 1fr; }}
+          .layout, .grid, .user-form-grid, .model-form-grid {{ grid-template-columns: 1fr; }}
           .sidebar {{ position: relative; height: auto; }}
           .safe-box {{ position: static; margin-top: 18px; }}
           main {{ padding: 22px 16px 36px; }}
@@ -474,6 +542,7 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
           </a>
           <nav class="nav">
             <a class="active" href="/admin">API 配置</a>
+            <a href="#chat-models">聊天模型</a>
             <a href="#users">用户管理</a>
             <a href="/docs">API Docs</a>
             <a href="/api/health">Health</a>
@@ -505,6 +574,48 @@ def admin_page(request: Request, db: Session = Depends(get_db)) -> Response:
           <div class="grid">
             {openai_card}
             {grok_card}
+
+            <section class="card wide" id="chat-models">
+              <div class="card-head">
+                <h2>聊天模型目录</h2>
+                <p>按 OpenAI / Grok 通道维护前端可选模型。实际模型 ID 会原样发送给对应上游。</p>
+              </div>
+              <div class="card-body">
+                <form method="post" action="/admin/chat-models">
+                  {csrf_field(csrf_token)}
+                  <div class="model-form-grid">
+                    <div class="field">
+                      <label for="chat_model_provider">通道</label>
+                      <select id="chat_model_provider" name="provider">
+                        <option value="openai">OpenAI</option>
+                        <option value="grok">Grok</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="chat_model_id">实际模型 ID</label>
+                      <input id="chat_model_id" name="model_id" required maxlength="160" placeholder="gpt-4.1-mini" />
+                    </div>
+                    <div class="field">
+                      <label for="chat_model_name">显示名称</label>
+                      <input id="chat_model_name" name="display_name" maxlength="120" placeholder="GPT-4.1 Mini" />
+                    </div>
+                    <div class="field">
+                      <label for="chat_model_sort">排序</label>
+                      <input id="chat_model_sort" name="sort_order" type="number" min="0" max="9999" value="100" />
+                    </div>
+                    <div class="field">
+                      <label for="chat_model_default">默认模型</label>
+                      <select id="chat_model_default" name="make_default">
+                        <option value="0">否</option>
+                        <option value="1">是</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button class="button" type="submit">添加聊天模型</button>
+                </form>
+              </div>
+              {render_chat_models(chat_models, csrf_token)}
+            </section>
 
             <section class="card wide" id="users">
               <div class="card-head">
@@ -570,6 +681,8 @@ async def update_settings(request: Request, db: Session = Depends(get_db)) -> Re
     api_key = data.get("api_key", "").strip()
     text_model = data.get("text_model", "").strip()
     image_model = data.get("image_model", "").strip()
+    if len(text_model) > 160 or any(character.isspace() for character in text_model):
+        return redirect_admin("默认聊天模型 ID 不能超过 160 个字符或包含空格。")
 
     if provider == "grok":
         set_setting(db, SETTING_GROK_BASE_URL, base_url)
@@ -577,6 +690,9 @@ async def update_settings(request: Request, db: Session = Depends(get_db)) -> Re
         set_setting(db, SETTING_GROK_IMAGE_MODEL, image_model)
         if api_key:
             set_setting(db, SETTING_GROK_API_KEY, api_key)
+        catalog_model = add_legacy_model_to_catalog(db, provider, text_model)
+        if catalog_model is not None:
+            set_default_chat_model(db, catalog_model)
         db.commit()
         return redirect_admin("Grok 配置已保存")
 
@@ -585,8 +701,183 @@ async def update_settings(request: Request, db: Session = Depends(get_db)) -> Re
     set_setting(db, SETTING_OPENAI_IMAGE_MODEL, image_model)
     if api_key:
         set_setting(db, SETTING_OPENAI_API_KEY, api_key)
+    catalog_model = add_legacy_model_to_catalog(db, provider, text_model)
+    if catalog_model is not None:
+        set_default_chat_model(db, catalog_model)
     db.commit()
     return redirect_admin("OpenAI 配置已保存")
+
+
+@router.post("/admin/chat-models")
+async def create_chat_model(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    admin = require_admin_or_redirect(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+
+    data = await read_form(request)
+    if not validate_csrf(request, data.get("csrf_token", "")):
+        return redirect_admin("CSRF 校验失败，请刷新页面后重试。")
+
+    provider = data.get("provider", "").strip().lower()
+    model_id = data.get("model_id", "").strip()
+    display_name = data.get("display_name", "").strip() or model_id
+    if provider not in {"openai", "grok"}:
+        return redirect_admin("模型通道必须是 OpenAI 或 Grok。")
+    if not model_id:
+        return redirect_admin("实际模型 ID 不能为空。")
+    if len(model_id) > 160 or len(display_name) > 120:
+        return redirect_admin("模型 ID 或显示名称过长。")
+    if any(character.isspace() for character in model_id):
+        return redirect_admin("实际模型 ID 不能包含空格。")
+    try:
+        sort_order = max(0, min(9999, int(data.get("sort_order", "100") or "100")))
+    except ValueError:
+        return redirect_admin("模型排序必须是 0 到 9999 的整数。")
+
+    if db.query(ChatModel.id).filter(ChatModel.provider == provider, ChatModel.model_id == model_id).first():
+        return redirect_admin("该通道下已经存在相同的模型 ID。")
+
+    has_default = (
+        db.query(ChatModel.id)
+        .filter(ChatModel.provider == provider, ChatModel.is_default.is_(True))
+        .first()
+        is not None
+    )
+    model = ChatModel(
+        provider=provider,
+        model_id=model_id,
+        display_name=display_name,
+        is_active=True,
+        is_default=False,
+        sort_order=sort_order,
+    )
+    db.add(model)
+    try:
+        db.flush()
+        if data.get("make_default") == "1" or not has_default:
+            set_default_chat_model(db, model)
+            sync_default_chat_model_setting(db, model)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return redirect_admin("该通道下已经存在相同的模型 ID。")
+    return redirect_admin(f"{display_name} 已添加到 {provider.upper()} 模型目录。")
+
+
+@router.post("/admin/chat-models/{model_id}/default")
+async def make_default_chat_model(model_id: int, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    admin = require_admin_or_redirect(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+
+    data = await read_form(request)
+    if not validate_csrf(request, data.get("csrf_token", "")):
+        return redirect_admin("CSRF 校验失败，请刷新页面后重试。")
+
+    model = db.get(ChatModel, model_id)
+    if model is None:
+        return redirect_admin("模型不存在或已被删除。")
+    set_default_chat_model(db, model)
+    sync_default_chat_model_setting(db, model)
+    db.commit()
+    return redirect_admin(f"{model.display_name} 已设为 {model.provider.upper()} 默认模型。")
+
+
+@router.post("/admin/chat-models/{model_id}/toggle")
+async def toggle_chat_model(model_id: int, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    admin = require_admin_or_redirect(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+
+    data = await read_form(request)
+    if not validate_csrf(request, data.get("csrf_token", "")):
+        return redirect_admin("CSRF 校验失败，请刷新页面后重试。")
+
+    model = db.get(ChatModel, model_id)
+    if model is None:
+        return redirect_admin("模型不存在或已被删除。")
+
+    if model.is_active:
+        active_models = (
+            db.query(ChatModel)
+            .filter(
+                ChatModel.provider == model.provider,
+                ChatModel.is_active.is_(True),
+                ChatModel.id != model.id,
+            )
+            .order_by(ChatModel.sort_order.asc(), ChatModel.id.asc())
+            .all()
+        )
+        if not active_models:
+            return redirect_admin("每个通道至少需要保留一个启用的模型。")
+        if model.is_default:
+            replacement = active_models[0]
+            set_default_chat_model(db, replacement)
+            sync_default_chat_model_setting(db, replacement)
+        model.is_active = False
+        model.is_default = False
+        message = f"{model.display_name} 已停用。"
+    else:
+        model.is_active = True
+        current_default = (
+            db.query(ChatModel.id)
+            .filter(ChatModel.provider == model.provider, ChatModel.is_default.is_(True))
+            .first()
+        )
+        if current_default is None:
+            set_default_chat_model(db, model)
+            sync_default_chat_model_setting(db, model)
+        message = f"{model.display_name} 已启用。"
+
+    db.commit()
+    return redirect_admin(message)
+
+
+@router.post("/admin/chat-models/{model_id}/delete")
+async def delete_chat_model(model_id: int, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    admin = require_admin_or_redirect(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+
+    data = await read_form(request)
+    if not validate_csrf(request, data.get("csrf_token", "")):
+        return redirect_admin("CSRF 校验失败，请刷新页面后重试。")
+
+    model = db.get(ChatModel, model_id)
+    if model is None:
+        return redirect_admin("模型不存在或已被删除。")
+    provider_models = db.query(ChatModel.id).filter(ChatModel.provider == model.provider).count()
+    if provider_models <= 1:
+        return redirect_admin("每个通道至少需要保留一个模型，无法删除最后一个。")
+
+    if model.is_default:
+        replacement = (
+            db.query(ChatModel)
+            .filter(
+                ChatModel.provider == model.provider,
+                ChatModel.is_active.is_(True),
+                ChatModel.id != model.id,
+            )
+            .order_by(ChatModel.sort_order.asc(), ChatModel.id.asc())
+            .first()
+        )
+        if replacement is None:
+            return redirect_admin("请先启用另一个模型，再删除当前默认模型。")
+        set_default_chat_model(db, replacement)
+        sync_default_chat_model_setting(db, replacement)
+    elif model.is_active:
+        active_count = (
+            db.query(ChatModel.id)
+            .filter(ChatModel.provider == model.provider, ChatModel.is_active.is_(True))
+            .count()
+        )
+        if active_count <= 1:
+            return redirect_admin("每个通道至少需要保留一个启用的模型。")
+
+    display_name = model.display_name
+    db.delete(model)
+    db.commit()
+    return redirect_admin(f"{display_name} 已从模型目录删除。")
 
 
 @router.post("/admin/users")

@@ -43,6 +43,8 @@ cd backend
 | prompt | TEXT | NOT NULL | 用户输入的图片 Prompt |
 | style | VARCHAR(40) | NOT NULL | 图片风格，如写实、动漫、3D、油画、产品图、摄影 |
 | size | VARCHAR(40) | NOT NULL | 图片尺寸，如 1024x1024、1536x864、864x1536 |
+| mode | VARCHAR(30) | NOT NULL, INDEX | `text_to_image` / `image_to_image` |
+| reference_count | INTEGER | NOT NULL | 本次使用的参考图数量 |
 | image_base64 | TEXT | NOT NULL | 图片 base64 数据 |
 | created_at | DATETIME | INDEX | 创建时间，UTC |
 
@@ -99,13 +101,38 @@ cd backend
 | session_id | INTEGER | FOREIGN KEY, INDEX | 所属会话 |
 | user_message_id | INTEGER | FOREIGN KEY, INDEX | 触发任务的用户消息 |
 | provider | VARCHAR(40) | NOT NULL, 默认 openai | openai / grok |
+| model | VARCHAR(160) | NOT NULL, INDEX | 入队时固化的实际聊天模型 ID |
 | status | VARCHAR(20) | NOT NULL, INDEX | pending / running / completed / failed |
 | error | TEXT | NOT NULL | 失败时的友好错误文案 |
 | created_at | DATETIME | INDEX | 入队时间，UTC |
 | started_at | DATETIME | NULL | 进入 running 的时间，UTC |
 | completed_at | DATETIME | NULL | 结束时间，UTC |
 
-## 4c. chat_attachments
+## 4c. chat_models
+
+管理员维护的聊天模型目录。前端通过 `GET /api/chat/models` 只读取启用模型，并按通道分组展示。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 模型目录 ID |
+| provider | VARCHAR(40) | NOT NULL, INDEX | `openai` / `grok` |
+| model_id | VARCHAR(160) | NOT NULL, INDEX | 原样发送给对应上游的模型 ID |
+| display_name | VARCHAR(120) | NOT NULL | 聊天页与管理台显示名称 |
+| is_active | BOOLEAN | NOT NULL, INDEX | 是否允许用户选择 |
+| is_default | BOOLEAN | NOT NULL, INDEX | 是否为该通道默认模型 |
+| sort_order | INTEGER | NOT NULL | 同一通道内的显示顺序，值越小越靠前 |
+| created_at | DATETIME | INDEX | 创建时间，UTC |
+| updated_at | DATETIME | 自动更新 | 最近更新时间，UTC |
+
+约束与兼容规则：
+
+- `(provider, model_id)` 唯一，同一通道不能重复添加同一个模型 ID。
+- 管理台设置默认模型时会清除该通道其他默认标记，并强制启用新默认模型。
+- 停用或删除默认模型时会切换到同通道另一个启用模型；每个通道至少保留一个启用模型。
+- 首次启动会从 `app_settings` / `.env` 的 OpenAI、Grok 文字模型配置各初始化一个默认目录项。
+- `app_settings` 中兼容保留的文字模型字段与目录默认模型同步。
+
+## 4d. chat_attachments
 
 聊天附件表。上传文件落盘后记录元数据；文本类会抽取 `text_content` 供模型使用。
 
@@ -122,7 +149,7 @@ cd backend
 | text_content | TEXT | NULL | 抽取的文本 |
 | created_at | DATETIME | INDEX | 创建时间，UTC |
 
-## 4d. image_jobs
+## 4e. image_jobs
 
 异步生图任务表。`POST /api/image/jobs` 写入 pending 行，worker 执行后写入 `image_records` 并回填 `image_record_id`。
 
@@ -136,6 +163,7 @@ cd backend
 | aspect_ratio | VARCHAR(20) | NOT NULL | 画幅 |
 | quality | VARCHAR(20) | NOT NULL | 清晰度 |
 | provider | VARCHAR(40) | NOT NULL, INDEX | openai / grok |
+| mode | VARCHAR(30) | NOT NULL, INDEX | `text_to_image` / `image_to_image` |
 | status | VARCHAR(20) | NOT NULL, INDEX | pending / running / completed / failed |
 | error | TEXT | NOT NULL | 失败文案 |
 | image_record_id | INTEGER | FOREIGN KEY, NULL | 成功后的图片记录 |
@@ -143,7 +171,23 @@ cd backend
 | started_at | DATETIME | NULL | 开始执行 |
 | completed_at | DATETIME | NULL | 结束时间 |
 
-## 4e. token_usage_records
+## 4f. image_job_references
+
+图生图任务的参考图片表。文件落盘到 `backend/uploads/image-references/`，表中保存安全文件名、校验后的 MIME、路径及上传顺序。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 参考图 ID |
+| job_id | INTEGER | FOREIGN KEY, INDEX | 所属生图任务 |
+| user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
+| filename | VARCHAR(255) | NOT NULL | 原始文件名（仅保留 basename） |
+| content_type | VARCHAR(120) | NOT NULL | 校验后的 image/png、image/jpeg 或 image/webp |
+| file_path | TEXT | NOT NULL | 本地存储路径 |
+| file_size | INTEGER | NOT NULL | 文件字节数 |
+| sort_order | INTEGER | NOT NULL | 多图上传顺序，从 0 开始 |
+| created_at | DATETIME | INDEX | 创建时间，UTC |
+
+## 4g. token_usage_records
 
 Token 用量统计表。聊天与生图成功后写入。
 
@@ -153,7 +197,7 @@ Token 用量统计表。聊天与生图成功后写入。
 | user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
 | source | VARCHAR(20) | NOT NULL, INDEX | chat / image |
 | provider | VARCHAR(40) | NOT NULL | openai / grok |
-| model | VARCHAR(120) | NOT NULL | 模型名 |
+| model | VARCHAR(160) | NOT NULL | 模型名 |
 | prompt_tokens | INTEGER | NOT NULL | 输入 token |
 | completion_tokens | INTEGER | NOT NULL | 输出 token |
 | total_tokens | INTEGER | NOT NULL, INDEX | 合计 |
@@ -176,12 +220,12 @@ Token 用量统计表。聊天与生图成功后写入。
 | --- | --- |
 | openai_base_url | OpenAI 或兼容服务 Base URL，例如 `https://api.openai.com/v1` |
 | openai_api_key | 后端使用的 OpenAI API Key |
-| openai_text_model | 文字对话使用的模型 |
+| openai_text_model | OpenAI 兼容默认/回退文字模型，与 `chat_models` 默认项同步 |
 | openai_image_model | AI 生图使用的模型 |
-| grok_base_url | Grok / sub2 兼容服务 Base URL |
+| grok_base_url | xAI 官方（默认 `https://api.x.ai/v1`）或 Grok 兼容服务 Base URL |
 | grok_api_key | 后端使用的 Grok API Key |
-| grok_text_model | Grok 文字对话模型 |
-| grok_image_model | Grok 生图模型 |
+| grok_text_model | Grok 兼容默认/回退文字模型，与 `chat_models` 默认项同步 |
+| grok_image_model | Grok 生图模型，默认 `grok-imagine-image-quality` |
 
 安全说明：
 
@@ -226,9 +270,11 @@ app_settings
 chat_attachments
 chat_jobs
 chat_messages
+chat_models
 chat_records
 chat_sessions
 image_jobs
+image_job_references
 image_records
 token_usage_records
 user_accounts
