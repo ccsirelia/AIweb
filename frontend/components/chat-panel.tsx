@@ -1,8 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Clock3, Copy, FileText, Loader2, MessageSquareText, Paperclip, Plus, RefreshCcw, SendHorizontal, Trash2, X } from "lucide-react";
+import {
+  Brain,
+  Check,
+  Clock3,
+  Copy,
+  FileDown,
+  FileText,
+  Loader2,
+  MessageSquareText,
+  Paperclip,
+  Plus,
+  RefreshCcw,
+  SendHorizontal,
+  Trash2,
+  X
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -12,6 +27,7 @@ import { toast } from "sonner";
 import {
   createChatJob,
   deleteChatSession,
+  downloadChatAnswerWord,
   getAuthToken,
   getChatJob,
   getChatModels,
@@ -43,6 +59,7 @@ const PENDING_JOBS_KEY = "aiweb_pending_chat_jobs";
 const CHAT_PROVIDER_KEY = "aiweb_chat_provider";
 const CHAT_MODEL_KEY_PREFIX = "aiweb_chat_model_";
 const FILE_ACCEPT = "image/*,.txt,.md,.csv,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.py,.js,.jsx,.ts,.tsx,.html,.css,.xml,.yaml,.yml";
+
 const providers: { label: string; value: Provider }[] = [
   { label: "OpenAI", value: "openai" },
   { label: "Grok", value: "grok" }
@@ -126,32 +143,31 @@ export function ChatPanel() {
   const [chatModels, setChatModels] = useState<ChatModel[]>([]);
   const [model, setModel] = useState("");
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
+  const [exportingMessageIndex, setExportingMessageIndex] = useState<number | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
+
   const lastUserMessage = useMemo(() => [...messages].reverse().find((item) => item.role === "user")?.content, [messages]);
   const availableModels = useMemo(() => chatModels.filter((item) => item.provider === provider), [chatModels, provider]);
-  const activePendingJob = useMemo(
-    () => pendingJobs.find((job) => job.session_id === activeSessionId),
-    [activeSessionId, pendingJobs]
-  );
+  const activePendingJob = useMemo(() => pendingJobs.find((job) => job.session_id === activeSessionId), [activeSessionId, pendingJobs]);
   const respondingProvider = activePendingJob?.provider ?? provider;
   const respondingModelId = activePendingJob?.model ?? model;
-  const respondingModel = chatModels.find(
-    (item) => item.provider === respondingProvider && item.model_id === respondingModelId
-  );
+  const respondingModel = chatModels.find((item) => item.provider === respondingProvider && item.model_id === respondingModelId);
 
   useEffect(() => {
     if (!getAuthToken()) {
       router.push("/login");
       return;
     }
+
     const storedProvider = localStorage.getItem(CHAT_PROVIDER_KEY);
-    // Accept legacy misspelling "gork".
     if (storedProvider === "openai" || storedProvider === "grok" || storedProvider === "gork") {
-      setProvider(storedProvider === "gork" ? "grok" : storedProvider);
-      if (storedProvider === "gork") {
-        localStorage.setItem(CHAT_PROVIDER_KEY, "grok");
-      }
+      const normalizedProvider = storedProvider === "gork" ? "grok" : storedProvider;
+      setProvider(normalizedProvider);
+      localStorage.setItem(CHAT_PROVIDER_KEY, normalizedProvider);
     }
+
     const storedSessionId = Number(localStorage.getItem(ACTIVE_SESSION_KEY) || "");
     const storedJobs = readPendingJobs();
     setPendingJobs(storedJobs);
@@ -174,9 +190,14 @@ export function ChatPanel() {
       availableModels.find((item) => item.model_id === storedModel)?.model_id ??
       availableModels.find((item) => item.is_default)?.model_id ??
       availableModels[0].model_id;
+
     localStorage.setItem(`${CHAT_MODEL_KEY_PREFIX}${provider}`, nextModel);
     setModel(nextModel);
   }, [availableModels, modelsLoading, provider]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages.length, loading]);
 
   useEffect(() => {
     if (pendingJobs.length === 0) return;
@@ -197,13 +218,14 @@ export function ChatPanel() {
 
     const nextJobs: ChatJob[] = [];
     let shouldReloadActiveSession = false;
+
     for (const job of jobs) {
       try {
         const latest = await getChatJob(job.id);
         if (latest.status === "completed") {
           shouldReloadActiveSession = shouldReloadActiveSession || latest.session_id === activeSessionId;
         } else if (latest.status === "failed") {
-          toast.error(latest.error || "AI 回复失败。");
+          toast.error(latest.error || "AI 回复失败，请稍后重试。");
           shouldReloadActiveSession = shouldReloadActiveSession || latest.session_id === activeSessionId;
         } else {
           nextJobs.push(latest);
@@ -212,9 +234,11 @@ export function ChatPanel() {
         nextJobs.push(job);
       }
     }
+
     writePendingJobs(nextJobs);
     setPendingJobs(nextJobs);
     setLoading(nextJobs.some((job) => job.session_id === activeSessionId));
+
     if (shouldReloadActiveSession && activeSessionId) {
       await openSession(activeSessionId, false);
       await refreshSessions();
@@ -226,7 +250,7 @@ export function ChatPanel() {
     try {
       setSessions(await getChatSessions());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "会话历史加载失败。");
+      toast.error(error instanceof Error ? error.message : "加载会话失败。");
     } finally {
       setSessionsLoading(false);
     }
@@ -237,7 +261,7 @@ export function ChatPanel() {
     try {
       setChatModels(await getChatModels());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "模型列表加载失败，将使用通道默认模型。");
+      toast.error(error instanceof Error ? error.message : "加载模型失败。");
     } finally {
       setModelsLoading(false);
     }
@@ -254,7 +278,7 @@ export function ChatPanel() {
       setMessages(detail.messages.map((item) => ({ role: item.role, content: item.content })));
       setLoading(readPendingJobs().some((job) => job.session_id === sessionId));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "会话读取失败。");
+      toast.error(error instanceof Error ? error.message : "打开会话失败。");
     } finally {
       if (showLoading && !readPendingJobs().some((job) => job.session_id === sessionId)) setLoading(false);
     }
@@ -290,7 +314,7 @@ export function ChatPanel() {
 
   async function deleteSession(sessionId: number) {
     const session = sessions.find((item) => item.id === sessionId);
-    const ok = window.confirm(`确定删除「${session?.title ?? "这个会话"}」吗？删除后该会话内容无法恢复。`);
+    const ok = window.confirm(`确定删除「${session?.title ?? "当前会话"}」吗？删除后无法恢复。`);
     if (!ok) return;
 
     setDeletingSessionId(sessionId);
@@ -315,7 +339,7 @@ export function ChatPanel() {
       await refreshSessions();
       toast.success("会话已删除。");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "会话删除失败。");
+      toast.error(error instanceof Error ? error.message : "删除会话失败。");
     } finally {
       setDeletingSessionId(null);
     }
@@ -326,7 +350,7 @@ export function ChatPanel() {
     const next = [...selectedFiles, ...Array.from(fileList)];
     const unique = next.filter((file, index, array) => array.findIndex((item) => item.name === file.name && item.size === file.size) === index);
     setSelectedFiles(unique.slice(0, 5));
-    if (unique.length > 5) toast.warning("已保留前 5 个附件。");
+    if (unique.length > 5) toast.warning("一次最多上传 5 个附件。");
   }
 
   function removeFile(index: number) {
@@ -337,7 +361,7 @@ export function ChatPanel() {
     const trimmed = message.trim();
     if (!trimmed && files.length === 0) return;
     if (trimmed.length > 4000) {
-      toast.error("输入不能超过 4000 个字符。");
+      toast.error("输入不能超过 4000 字。");
       return;
     }
     if (files.length > 5) {
@@ -348,9 +372,11 @@ export function ChatPanel() {
     setLoading(true);
     setInput("");
     setSelectedFiles([]);
+
     const fallbackMessage = trimmed || "请分析这些附件。";
     const attachmentText = files.length ? `\n\n附件：${files.map((file) => file.name).join(", ")}` : "";
     setMessages((prev) => [...prev, { role: "user", content: `${fallbackMessage}${attachmentText}` }]);
+
     try {
       const job = await createChatJob(fallbackMessage, activeSessionId, files, provider, model || undefined);
       setActiveSessionId(job.session_id);
@@ -360,52 +386,91 @@ export function ChatPanel() {
       setPendingJobs(jobs);
       await refreshSessions();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "AI 回复失败。");
+      toast.error(error instanceof Error ? error.message : "AI 回复失败，请稍后重试。");
       setInput(trimmed);
       setSelectedFiles(files);
       setLoading(false);
     }
   }
 
-  function copyText(text: string) {
-    navigator.clipboard.writeText(text);
-    toast.success("已复制回复。");
+  async function copyText(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageIndex(index);
+      toast.success("已复制回答内容。");
+      window.setTimeout(() => setCopiedMessageIndex((current) => (current === index ? null : current)), 1400);
+    } catch {
+      toast.error("复制失败，请手动选择文本复制。");
+    }
   }
 
-  function renderAssistantMessage(content: string) {
+  async function exportWord(text: string, index: number) {
+    setExportingMessageIndex(index);
+    try {
+      await downloadChatAnswerWord(text);
+      toast.success("Word 文档已开始下载。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "导出 Word 失败。");
+    } finally {
+      setExportingMessageIndex(null);
+    }
+  }
+
+  function renderAssistantMessage(content: string, index: number) {
     const parsed = parseAssistantContent(content);
+    const isCopied = copiedMessageIndex === index;
+    const isExporting = exportingMessageIndex === index;
+
     return (
       <div className="w-full min-w-0">
+        <div className="mb-3 flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg"
+            onClick={() => copyText(parsed.answer, index)}
+            aria-label="复制回答"
+            title="复制回答"
+          >
+            {isCopied ? <Check className="h-3.5 w-3.5 text-[#5B7CFF]" /> : <Copy className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg"
+            onClick={() => exportWord(parsed.answer, index)}
+            disabled={isExporting}
+            aria-label="导出 Word"
+            title="导出 Word"
+          >
+            {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#5B7CFF]" /> : <FileDown className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+
         {parsed.thought && (
           <details className="mb-3 rounded-xl border border-[#5B7CFF]/20 bg-[#5B7CFF]/5 px-3 py-2">
             <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-[#5B7CFF]">
               <Brain className="h-3.5 w-3.5" />
-              详细思考说明
+              思考摘要
             </summary>
             <div className="mt-2 text-muted-foreground">
               <MarkdownContent content={parsed.thought} compact />
             </div>
           </details>
         )}
+
         <MarkdownContent content={parsed.answer} />
-        <div className="mt-3 flex justify-end border-t border-border/60 pt-2">
-          <Button variant="ghost" size="sm" onClick={() => copyText(parsed.answer)}>
-            <Copy className="h-3.5 w-3.5" />
-            复制
-          </Button>
-        </div>
       </div>
     );
   }
 
   return (
     <PageShell>
-      {/* Fixed viewport height so only the message list scrolls, not the whole page. */}
       <div className="grid h-[calc(100dvh-7.25rem)] min-h-[520px] gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card className="flex h-full min-h-0 flex-col overflow-hidden">
           <div className="flex shrink-0 flex-col items-start gap-3 border-b border-border px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold tracking-tight">GPT 文字对话</h2>
+              <h2 className="text-lg font-semibold tracking-tight">GPT 智能对话</h2>
               <p className="mt-0.5 truncate text-sm text-muted-foreground">OpenAI / Grok · Markdown · 公式 · 附件分析</p>
             </div>
             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:justify-end">
@@ -424,21 +489,22 @@ export function ChatPanel() {
                 ))}
               </div>
               <select
-                aria-label={`${provider === "grok" ? "Grok" : "OpenAI"} 模型版本`}
-                title={availableModels.find((item) => item.model_id === model)?.model_id ?? "使用通道默认模型"}
+                aria-label={`${provider === "grok" ? "Grok" : "OpenAI"} 模型`}
+                title={availableModels.find((item) => item.model_id === model)?.model_id ?? "选择模型"}
                 value={model}
                 disabled={modelsLoading || availableModels.length === 0}
                 onChange={(event) => changeModel(event.target.value)}
                 className="h-10 min-w-[150px] max-w-[220px] flex-1 rounded-xl border border-border bg-background/70 px-3 text-xs font-semibold outline-none transition focus:border-[#5B7CFF] focus:ring-2 focus:ring-[#5B7CFF]/15 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
               >
                 {modelsLoading ? (
-                  <option value="">正在加载模型...</option>
+                  <option value="">加载模型中...</option>
                 ) : availableModels.length === 0 ? (
-                  <option value="">通道默认模型</option>
+                  <option value="">暂无可用模型</option>
                 ) : (
                   availableModels.map((item) => (
                     <option key={item.id} value={item.model_id}>
-                      {item.display_name}{item.is_default ? "（默认）" : ""}
+                      {item.display_name}
+                      {item.is_default ? "（默认）" : ""}
                     </option>
                   ))
                 )}
@@ -451,7 +517,6 @@ export function ChatPanel() {
           </div>
 
           <div className="soft-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5 sm:py-5">
-            {/* Full-width message rail so bubbles track the dialog width. */}
             <div className="mx-auto flex w-full max-w-none flex-col gap-4">
               {messages.length === 0 ? (
                 <div className="grid min-h-[240px] flex-1 place-items-center text-center">
@@ -459,16 +524,15 @@ export function ChatPanel() {
                     <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
                       <SendHorizontal className="h-6 w-6" />
                     </div>
-                    <h3 className="mt-5 text-xl font-semibold">向 AI 发起第一条创作请求</h3>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">选择通道后发送消息，回复会铺满对话区宽度，阅读更连贯。</p>
+                    <h3 className="mt-5 text-xl font-semibold">开始一次新的 AI 对话</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      输入问题，或上传图片、文档、表格等附件，让 AI 帮你分析、写作、归纳和创作。
+                    </p>
                   </div>
                 </div>
               ) : (
                 messages.map((message, index) => (
-                  <div
-                    key={`${message.role}-${index}`}
-                    className={cn("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}
-                  >
+                  <div key={`${message.role}-${index}`} className={cn("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}>
                     <div
                       className={cn(
                         "text-sm leading-6",
@@ -477,11 +541,7 @@ export function ChatPanel() {
                           : "chat-assistant-bubble w-full max-w-full rounded-2xl rounded-bl-md border border-border bg-background/80 px-4 py-3.5 shadow-sm sm:px-5 sm:py-4"
                       )}
                     >
-                      {message.role === "assistant" ? (
-                        renderAssistantMessage(message.content)
-                      ) : (
-                        <div className="whitespace-pre-wrap break-words">{message.content}</div>
-                      )}
+                      {message.role === "assistant" ? renderAssistantMessage(message.content, index) : <div className="whitespace-pre-wrap break-words">{message.content}</div>}
                     </div>
                   </div>
                 ))
@@ -492,10 +552,11 @@ export function ChatPanel() {
                   <div className="inline-flex items-center gap-3 rounded-2xl border border-border bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
                     <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
                     AI 正在通过 {respondingProvider === "grok" ? "Grok" : "OpenAI"}
-                    {respondingModelId ? ` · ${respondingModel?.display_name ?? respondingModelId}` : ""} 组织回复...
+                    {respondingModelId ? ` · ${respondingModel?.display_name ?? respondingModelId}` : ""} 生成回答...
                   </div>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
           </div>
 
@@ -518,7 +579,7 @@ export function ChatPanel() {
                 value={input}
                 maxLength={4000}
                 className="min-h-[96px]"
-                placeholder="输入你的问题或创作需求，Enter 发送，Shift + Enter 换行..."
+                placeholder="输入你的问题。Enter 发送，Shift + Enter 换行。"
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -529,7 +590,17 @@ export function ChatPanel() {
               />
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <input id="chat-attachments" type="file" multiple accept={FILE_ACCEPT} className="hidden" onChange={(event) => addFiles(event.target.files)} />
+                  <input
+                    id="chat-attachments"
+                    type="file"
+                    multiple
+                    accept={FILE_ACCEPT}
+                    className="hidden"
+                    onChange={(event) => {
+                      addFiles(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
                   <Button asChild variant="secondary" size="icon" aria-label="上传附件">
                     <label htmlFor="chat-attachments" className="cursor-pointer">
                       <Paperclip className="h-4 w-4" />
@@ -556,7 +627,7 @@ export function ChatPanel() {
           <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">最近会话</h3>
-              <p className="mt-1 text-xs text-muted-foreground">最近 10 条，可继续原对话</p>
+              <p className="mt-1 text-xs text-muted-foreground">显示最近 10 条，可继续原来的对话。</p>
             </div>
             <Button variant="secondary" size="icon" onClick={startNewChat} aria-label="新对话">
               <Plus className="h-4 w-4" />
@@ -567,14 +638,14 @@ export function ChatPanel() {
             {sessionsLoading ? (
               <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-[#5B7CFF]" />
-                正在读取...
+                加载会话中...
               </div>
             ) : sessions.length === 0 ? (
               <div className="grid min-h-[200px] place-items-center rounded-2xl border border-dashed border-border bg-background/60 text-center">
                 <div>
                   <MessageSquareText className="mx-auto h-6 w-6 text-[#5B7CFF]" />
-                  <p className="mt-3 text-sm font-medium">还没有会话</p>
-                  <p className="mt-1 text-xs text-muted-foreground">发送第一条消息后会自动保存。</p>
+                  <p className="mt-3 text-sm font-medium">暂无历史会话</p>
+                  <p className="mt-1 text-xs text-muted-foreground">发送第一条消息后，这里会自动保存。</p>
                 </div>
               </div>
             ) : (

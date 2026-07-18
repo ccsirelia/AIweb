@@ -65,6 +65,10 @@ class ChatResponse(BaseModel):
     session_id: int
 
 
+class ChatExportRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=100000)
+
+
 class ChatJobOut(BaseModel):
     id: int
     session_id: int

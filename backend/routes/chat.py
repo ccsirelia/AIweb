@@ -1,17 +1,19 @@
 import logging
 import re
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
+from starlette.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from database.models import ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, UserAccount, now_utc
 from database.session import get_db
-from models.schemas import ChatJobOut, ChatModelOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
+from models.schemas import ChatExportRequest, ChatJobOut, ChatModelOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
 from services.auth_service import current_user
 from services.chat_context_service import load_recent_chat_history
 from services.chat_model_service import list_active_chat_models, resolve_chat_model
@@ -66,6 +68,7 @@ IMAGE_MIME_BY_EXT = {
     ".gif": "image/gif",
 }
 REQUIRE_EXTRACTED_TEXT_EXTENSIONS = {".docx", ".pdf", ".pptx", ".xlsx"}
+WORD_FONT_NAME = "微软雅黑"
 
 
 def make_session_title(message: str) -> str:
@@ -86,6 +89,259 @@ def extract_text(filename: str, content_type: str, data: bytes) -> str | None:
     else:
         logger.warning("No text extracted from %s (%s)", filename, content_type)
     return text
+
+
+def strip_assistant_markup(content: str) -> str:
+    answer = re.search(r"<ai_answer>\s*([\s\S]*?)\s*</ai_answer>", content, flags=re.IGNORECASE)
+    if answer:
+        return answer.group(1).strip()
+    return re.sub(r"<ai_thought_summary>[\s\S]*?</ai_thought_summary>", "", content, flags=re.IGNORECASE).strip()
+
+
+def normalize_word_math_delimiters(content: str) -> str:
+    return (
+        content.replace("\r\n", "\n")
+        .replace("\\[", "$$")
+        .replace("\\]", "$$")
+        .replace("\\(", "$")
+        .replace("\\)", "$")
+    )
+
+
+def clean_markdown_text(value: str) -> str:
+    text = value.strip()
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1（\2）", text)
+    text = text.replace("\\|", "|")
+    return text
+
+
+def set_run_font(run: Any, size: float | None = 10.5, bold: bool | None = None, italic: bool | None = None, color: str | None = None) -> None:
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    run.font.name = WORD_FONT_NAME
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), WORD_FONT_NAME)
+    if size is not None:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.bold = bold
+    if italic is not None:
+        run.italic = italic
+    if color:
+        run.font.color.rgb = RGBColor.from_string(color)
+
+
+def set_paragraph_spacing(paragraph: Any, before: int = 0, after: int = 6, line_spacing: float = 1.25) -> None:
+    from docx.shared import Pt
+
+    paragraph.paragraph_format.space_before = Pt(before)
+    paragraph.paragraph_format.space_after = Pt(after)
+    paragraph.paragraph_format.line_spacing = line_spacing
+
+
+def add_inline_markdown_runs(paragraph: Any, text: str, size: float = 10.5) -> None:
+    token_pattern = re.compile(r"(`[^`]+`|\*\*.+?\*\*|__.+?__|\*[^*\n]+\*|_[^_\n]+_)", re.DOTALL)
+    position = 0
+    text = clean_markdown_text(text)
+
+    for match in token_pattern.finditer(text):
+        if match.start() > position:
+            set_run_font(paragraph.add_run(text[position : match.start()]), size=size)
+
+        token = match.group(0)
+        if token.startswith("`") and token.endswith("`"):
+            run = paragraph.add_run(token[1:-1])
+            set_run_font(run, size=size, color="374151")
+        elif (token.startswith("**") and token.endswith("**")) or (token.startswith("__") and token.endswith("__")):
+            run = paragraph.add_run(token[2:-2])
+            set_run_font(run, size=size, bold=True)
+        elif (token.startswith("*") and token.endswith("*")) or (token.startswith("_") and token.endswith("_")):
+            run = paragraph.add_run(token[1:-1])
+            set_run_font(run, size=size, italic=True)
+        position = match.end()
+
+    if position < len(text):
+        set_run_font(paragraph.add_run(text[position:]), size=size)
+
+
+def table_cells(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    cells = re.split(r"(?<!\\)\|", stripped)
+    return [clean_markdown_text(cell) for cell in cells]
+
+
+def is_table_separator(line: str) -> bool:
+    cells = table_cells(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def is_table_start(lines: list[str], index: int) -> bool:
+    return index + 1 < len(lines) and "|" in lines[index] and is_table_separator(lines[index + 1])
+
+
+def shade_cell(cell: Any, fill: str) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:fill"), fill)
+    tc_pr.append(shading)
+
+
+def set_cell_text(cell: Any, text: str, bold: bool = False) -> None:
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    set_paragraph_spacing(paragraph, after=0, line_spacing=1.15)
+    add_inline_markdown_runs(paragraph, text, size=9.5)
+    for run in paragraph.runs:
+        run.bold = bold or run.bold
+
+
+def add_markdown_table(document: Any, table_lines: list[str]) -> None:
+    if len(table_lines) < 2:
+        return
+
+    rows = [table_cells(line) for line in table_lines[:1] + table_lines[2:]]
+    column_count = max(len(row) for row in rows)
+    table = document.add_table(rows=len(rows), cols=column_count)
+    table.style = "Table Grid"
+    table.autofit = True
+
+    for row_index, row_values in enumerate(rows):
+        row = table.rows[row_index]
+        for column_index in range(column_count):
+            cell = row.cells[column_index]
+            value = row_values[column_index] if column_index < len(row_values) else ""
+            set_cell_text(cell, value, bold=row_index == 0)
+            if row_index == 0:
+                shade_cell(cell, "EEF2FF")
+            elif row_index % 2 == 0:
+                shade_cell(cell, "F8FAFC")
+
+    document.add_paragraph()
+
+
+def configure_word_document(document: Any) -> None:
+    from docx.enum.style import WD_STYLE_TYPE
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt
+
+    section = document.sections[0]
+    section.top_margin = Inches(0.75)
+    section.bottom_margin = Inches(0.75)
+    section.left_margin = Inches(0.82)
+    section.right_margin = Inches(0.82)
+
+    for style in document.styles:
+        if style.type != WD_STYLE_TYPE.PARAGRAPH:
+            continue
+        if not hasattr(style, "font"):
+            continue
+        style.font.name = WORD_FONT_NAME
+        style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), WORD_FONT_NAME)
+
+    normal_style = document.styles["Normal"]
+    normal_style.font.name = WORD_FONT_NAME
+    normal_style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), WORD_FONT_NAME)
+    normal_style.font.size = Pt(10.5)
+
+
+def add_markdown_to_document(document: Any, content: str) -> None:
+    lines = normalize_word_math_delimiters(content).split("\n")
+    in_code_block = False
+    code_lines: list[str] = []
+    index = 0
+
+    def flush_code() -> None:
+        nonlocal code_lines
+        if not code_lines:
+            return
+        paragraph = document.add_paragraph()
+        set_paragraph_spacing(paragraph, before=4, after=8, line_spacing=1.1)
+        run = paragraph.add_run("\n".join(code_lines))
+        set_run_font(run, size=9.5, color="111827")
+        code_lines = []
+
+    while index < len(lines):
+        raw_line = lines[index]
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            if in_code_block:
+                flush_code()
+                in_code_block = False
+            else:
+                in_code_block = True
+                code_lines = []
+            index += 1
+            continue
+
+        if in_code_block:
+            code_lines.append(raw_line)
+            index += 1
+            continue
+
+        if not stripped:
+            index += 1
+            continue
+
+        if is_table_start(lines, index):
+            table_lines = [lines[index], lines[index + 1]]
+            index += 2
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                table_lines.append(lines[index])
+                index += 1
+            add_markdown_table(document, table_lines)
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if heading:
+            paragraph = document.add_heading("", level=len(heading.group(1)))
+            set_paragraph_spacing(paragraph, before=12, after=6, line_spacing=1.18)
+            run = paragraph.add_run(clean_markdown_text(heading.group(2)))
+            set_run_font(run, size={1: 18, 2: 15, 3: 12.5}[len(heading.group(1))], bold=True, color="111827")
+            index += 1
+            continue
+
+        bullet = re.match(r"^[-*]\s+(.+)$", stripped)
+        if bullet:
+            paragraph = document.add_paragraph(style="List Bullet")
+            set_paragraph_spacing(paragraph, after=3, line_spacing=1.22)
+            add_inline_markdown_runs(paragraph, bullet.group(1), size=10.5)
+            index += 1
+            continue
+
+        numbered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+        if numbered:
+            paragraph = document.add_paragraph(style="List Number")
+            set_paragraph_spacing(paragraph, after=3, line_spacing=1.22)
+            add_inline_markdown_runs(paragraph, numbered.group(1), size=10.5)
+            index += 1
+            continue
+
+        quote = re.match(r"^>\s+(.+)$", stripped)
+        if quote:
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.left_indent = None
+            set_paragraph_spacing(paragraph, before=3, after=6, line_spacing=1.22)
+            run = paragraph.add_run("“")
+            set_run_font(run, size=11, bold=True, color="5B7CFF")
+            add_inline_markdown_runs(paragraph, quote.group(1), size=10.5)
+            run = paragraph.add_run("”")
+            set_run_font(run, size=11, bold=True, color="5B7CFF")
+            index += 1
+            continue
+
+        paragraph = document.add_paragraph()
+        set_paragraph_spacing(paragraph, after=6, line_spacing=1.28)
+        add_inline_markdown_runs(paragraph, stripped, size=10.5)
+        index += 1
+
+    if in_code_block:
+        flush_code()
 
 
 def _is_upload_file(value: Any) -> bool:
@@ -226,6 +482,44 @@ def chat_sessions(db: Session = Depends(get_db), user: UserAccount = Depends(cur
 @router.get("/chat/models", response_model=list[ChatModelOut])
 def chat_models(db: Session = Depends(get_db), _user: UserAccount = Depends(current_user)) -> list[ChatModelOut]:
     return list_active_chat_models(db)
+
+
+@router.post("/chat/export-word")
+def export_chat_word(
+    payload: ChatExportRequest,
+    _user: UserAccount = Depends(current_user),
+) -> StreamingResponse:
+    try:
+        from docx import Document
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail="python-docx is not installed.") from exc
+
+    content = strip_assistant_markup(payload.content)
+    if not content:
+        raise HTTPException(status_code=422, detail="No answer content to export.")
+
+    document = Document()
+    configure_word_document(document)
+
+    title = document.add_heading("", level=1)
+    title_run = title.add_run("AIWeb 回答内容")
+    set_run_font(title_run, size=20, bold=True, color="111827")
+    set_paragraph_spacing(title, before=0, after=4, line_spacing=1.12)
+    meta = document.add_paragraph()
+    set_paragraph_spacing(meta, after=12, line_spacing=1.1)
+    meta_run = meta.add_run(f"导出时间：{now_utc().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    set_run_font(meta_run, size=9, color="6B7280")
+    add_markdown_to_document(document, content)
+
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    filename = f"aiweb-answer-{now_utc().strftime('%Y%m%d-%H%M%S')}.docx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)

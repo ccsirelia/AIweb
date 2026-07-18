@@ -1,5 +1,5 @@
 param(
-  [int]$FrontendPort = 5008,
+  [int]$FrontendPort = 3000,
   [int]$BackendPort = 8008
 )
 
@@ -50,11 +50,19 @@ if (Test-AIWebProcess $BackendPidFile "backend") {
 if (Test-AIWebProcess $FrontendPidFile "frontend") {
   Write-Host "AIWeb frontend already running. PID: $(Get-Content $FrontendPidFile -Raw)"
 } else {
+  $node = (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source
+  if (-not $node) {
+    throw "node.exe not found. Please install Node.js and ensure it is in PATH."
+  }
+  $nextBin = Join-Path $FrontendDir "node_modules\next\dist\bin\next"
+  if (-not (Test-Path $nextBin)) {
+    throw "Next.js runner not found: $nextBin. Please run npm install in frontend first."
+  }
   $frontendOut = Join-Path $LogDir "frontend.out.log"
   $frontendErr = Join-Path $LogDir "frontend.err.log"
   $frontend = Start-Process `
-    -FilePath "npm.cmd" `
-    -ArgumentList @("run", "dev", "--", "-p", "$FrontendPort") `
+    -FilePath $node `
+    -ArgumentList @($nextBin, "dev", "-p", "$FrontendPort") `
     -WorkingDirectory $FrontendDir `
     -RedirectStandardOutput $frontendOut `
     -RedirectStandardError $frontendErr `

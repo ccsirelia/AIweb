@@ -11,6 +11,17 @@
   --muted: 0 0% 50%;
   --primary: 229 100% 68%;
   --border: 228 22% 88%;
+  --portrait-glass-opacity: 12%;
+  --portrait-glass-panel-opacity: 14%;
+  --portrait-glass-subtle-opacity: 8%;
+  --portrait-glass-high-opacity: 16%;
+  --portrait-glass-medium-opacity: 13%;
+  --portrait-glass-low-opacity: 9%;
+  --portrait-glass-dark-opacity: 20%;
+  --portrait-glass-dark-subtle-opacity: 12%;
+  --portrait-glass-dark-high-opacity: 22%;
+  --portrait-glass-dark-medium-opacity: 18%;
+  --portrait-glass-dark-low-opacity: 15%;
 }
 
 .dark {
@@ -32,11 +43,97 @@ html {
 
 body {
   margin: 0;
+  min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(91, 124, 255, 0.12), transparent 34rem),
     hsl(var(--background));
   color: hsl(var(--foreground));
   letter-spacing: 0;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
+}
+
+.site-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 500ms ease, visibility 500ms ease;
+}
+
+.site-backdrop-image {
+  object-fit: cover;
+  object-position: 67% center;
+  filter: saturate(0.98) contrast(1.02);
+  transform: scale(1.01);
+}
+
+.site-backdrop-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(249, 250, 253, 0.14) 0%, rgba(249, 247, 250, 0.08) 43%, rgba(255, 246, 248, 0.03) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(244, 240, 246, 0.05));
+  transition: background 300ms ease;
+}
+
+html[data-background="portrait"] .site-backdrop {
+  opacity: 1;
+  visibility: visible;
+}
+
+html[data-background="portrait"] .site-sidebar {
+  border-color: color-mix(in srgb, hsl(var(--border)) 70%, rgba(255, 255, 255, 0.88));
+  background: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-panel-opacity), transparent);
+  box-shadow: 18px 0 60px rgba(74, 46, 58, 0.12), inset -1px 0 0 rgba(255, 255, 255, 0.58);
+  backdrop-filter: blur(4px) saturate(1.04);
+}
+
+html[data-background="portrait"] .glass-panel {
+  border-color: color-mix(in srgb, hsl(var(--border)) 66%, rgba(255, 255, 255, 0.88));
+  background: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-panel-opacity), transparent);
+  box-shadow: 0 24px 70px rgba(74, 46, 58, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(3px) saturate(1.04);
+}
+
+.dark .site-backdrop-image {
+  filter: saturate(0.72) brightness(0.76) contrast(1.03);
+}
+
+.dark .site-backdrop-veil {
+  background:
+    linear-gradient(90deg, rgba(10, 12, 18, 0.28) 0%, rgba(13, 14, 21, 0.18) 48%, rgba(21, 15, 22, 0.1) 100%),
+    linear-gradient(180deg, rgba(5, 7, 12, 0.04), rgba(5, 7, 12, 0.1));
+}
+
+.dark[data-background="portrait"] .site-sidebar {
+  border-color: color-mix(in srgb, hsl(var(--border)) 68%, rgba(255, 255, 255, 0.34));
+  background: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-dark-opacity), transparent);
+  box-shadow: 18px 0 70px rgba(0, 0, 0, 0.3), inset -1px 0 0 rgba(255, 255, 255, 0.14);
+}
+
+@media (max-width: 767px) {
+  .site-backdrop-image {
+    object-position: 71% center;
+  }
+
+  .site-backdrop-veil {
+    background:
+      linear-gradient(180deg, rgba(249, 250, 253, 0.16) 0%, rgba(250, 245, 248, 0.08) 48%, rgba(255, 246, 248, 0.16) 100%),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.03), rgba(255, 242, 246, 0.06));
+  }
+
+  .dark .site-backdrop-veil {
+    background:
+      linear-gradient(180deg, rgba(9, 11, 17, 0.28) 0%, rgba(13, 13, 20, 0.18) 48%, rgba(12, 10, 16, 0.28) 100%),
+      linear-gradient(90deg, rgba(5, 7, 12, 0.04), rgba(20, 12, 20, 0.08));
+  }
 }
 
 button,
@@ -78,9 +175,140 @@ select {
 }
 
 .glass-panel {
-  border: 1px solid hsl(var(--border));
-  background: color-mix(in srgb, hsl(var(--card)) 86%, transparent);
-  backdrop-filter: blur(22px);
+  border: 1px solid color-mix(in srgb, hsl(var(--border)) 78%, rgba(255, 255, 255, 0.55));
+  background: color-mix(in srgb, hsl(var(--card)) 68%, transparent);
+  box-shadow: 0 22px 70px rgba(15, 17, 23, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.46);
+  backdrop-filter: blur(24px) saturate(1.08);
+}
+
+.glass-card {
+  border-color: color-mix(in srgb, hsl(var(--border)) 82%, rgba(255, 255, 255, 0.6));
+  background: color-mix(in srgb, hsl(var(--card)) 68%, transparent);
+  box-shadow: 0 22px 70px rgba(15, 17, 23, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  backdrop-filter: blur(24px) saturate(1.1);
+}
+
+.dark .glass-panel,
+.dark .glass-card {
+  border-color: color-mix(in srgb, hsl(var(--border)) 82%, rgba(255, 255, 255, 0.22));
+  background: color-mix(in srgb, hsl(var(--card)) 68%, transparent);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+html[data-background="portrait"] .glass-card {
+  border-color: color-mix(in srgb, hsl(var(--border)) 64%, rgba(255, 255, 255, 0.9));
+  background: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-opacity), transparent);
+  box-shadow: 0 24px 76px rgba(74, 46, 58, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(3px) saturate(1.04);
+}
+
+.dark[data-background="portrait"] .glass-card,
+.dark[data-background="portrait"] .glass-panel {
+  border-color: color-mix(in srgb, hsl(var(--border)) 64%, rgba(255, 255, 255, 0.34));
+  background: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-dark-opacity), transparent);
+  box-shadow: 0 24px 84px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(3px) saturate(1.03);
+}
+
+html[data-background="portrait"] .bg-card,
+html[data-background="portrait"] .bg-card\/70,
+html[data-background="portrait"] .bg-card\/76,
+html[data-background="portrait"] .bg-card\/82 {
+  background-color: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-panel-opacity), transparent);
+}
+
+html[data-background="portrait"] .bg-card\/40 {
+  background-color: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-subtle-opacity), transparent);
+}
+
+html[data-background="portrait"] .bg-background\/80 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-high-opacity), transparent);
+}
+
+html[data-background="portrait"] .bg-background\/70 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-medium-opacity), transparent);
+}
+
+html[data-background="portrait"] .bg-background\/60 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-low-opacity), transparent);
+}
+
+html[data-background="portrait"] .bg-background\/50 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-subtle-opacity), transparent);
+}
+
+html[data-background="portrait"] .border-border {
+  border-color: color-mix(in srgb, hsl(var(--border)) 76%, rgba(255, 255, 255, 0.5));
+}
+
+.dark[data-background="portrait"] .bg-card,
+.dark[data-background="portrait"] .bg-card\/70,
+.dark[data-background="portrait"] .bg-card\/76,
+.dark[data-background="portrait"] .bg-card\/82 {
+  background-color: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-dark-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .bg-card\/40 {
+  background-color: color-mix(in srgb, hsl(var(--card)) var(--portrait-glass-dark-subtle-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .bg-background\/80 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-dark-high-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .bg-background\/70 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-dark-medium-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .bg-background\/60 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-dark-low-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .bg-background\/50 {
+  background-color: color-mix(in srgb, hsl(var(--background)) var(--portrait-glass-dark-subtle-opacity), transparent);
+}
+
+.dark[data-background="portrait"] .border-border {
+  border-color: color-mix(in srgb, hsl(var(--border)) 80%, rgba(255, 255, 255, 0.2));
+}
+
+.transparency-slider {
+  appearance: none;
+  height: 5px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #5b7cff 0%,
+    #8a5cff var(--slider-progress),
+    color-mix(in srgb, hsl(var(--border)) 76%, transparent) var(--slider-progress),
+    color-mix(in srgb, hsl(var(--border)) 76%, transparent) 100%
+  );
+}
+
+.transparency-slider:focus-visible {
+  outline: 2px solid rgba(91, 124, 255, 0.72);
+  outline-offset: 4px;
+}
+
+.transparency-slider::-webkit-slider-thumb {
+  width: 17px;
+  height: 17px;
+  appearance: none;
+  border: 2px solid rgba(255, 255, 255, 0.86);
+  border-radius: 999px;
+  background: #5b7cff;
+  box-shadow: 0 3px 10px rgba(35, 48, 118, 0.32);
+}
+
+.transparency-slider::-moz-range-thumb {
+  width: 17px;
+  height: 17px;
+  border: 2px solid rgba(255, 255, 255, 0.86);
+  border-radius: 999px;
+  background: #5b7cff;
+  box-shadow: 0 3px 10px rgba(35, 48, 118, 0.32);
 }
 
 .soft-scrollbar {

@@ -58,7 +58,9 @@ function Stop-TrackedProcess {
   }
 
   if (-not ($rootMatch -and $kindMatch)) {
-    throw "Refusing to stop PID $processId because it does not look like an AIWeb $Kind process."
+    Remove-Item $PidFile -Force
+    Write-Host "AIWeb $Kind PID file removed; tracked PID $processId did not match this project."
+    return
   }
 
   Stop-ProcessTreeSafely $processId $Kind

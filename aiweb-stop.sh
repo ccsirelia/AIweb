@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME_DIR="$ROOT/.runtime"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$SCRIPT_DIR"
+
+PROJECT_ROOT="$(pwd -P)"
+RUNTIME_DIR=".runtime"
 BACKEND_PID_FILE="$RUNTIME_DIR/aiweb-backend.pid"
 FRONTEND_PID_FILE="$RUNTIME_DIR/aiweb-frontend.pid"
+
+process_cwd_matches() {
+  local pid="$1"
+  local expected_dir="$2"
+  local cwd
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+  [[ "$cwd" == "$expected_dir" ]]
+}
 
 stop_aiweb_process() {
   local pid_file="$1"
   local kind="$2"
+  local expected_dir="$3"
 
   if [[ ! -f "$pid_file" ]]; then
     echo "AIWeb $kind is not tracked as running."
@@ -23,20 +35,23 @@ stop_aiweb_process() {
     return
   fi
 
-  local cmd
-  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-  if [[ "$cmd" != *"$ROOT"* ]]; then
-    echo "Refusing to stop PID $pid because it does not look like an AIWeb $kind process." >&2
-    exit 1
+  if ! process_cwd_matches "$pid" "$expected_dir"; then
+    rm -f "$pid_file"
+    echo "AIWeb $kind PID file removed; tracked PID $pid did not match this project."
+    return
   fi
 
+  local cmd
+  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
   if [[ "$kind" == "backend" && "$cmd" != *"uvicorn"* && "$cmd" != *"python"* ]]; then
-    echo "Refusing to stop PID $pid because it does not look like an AIWeb backend process." >&2
-    exit 1
+    rm -f "$pid_file"
+    echo "AIWeb backend PID file removed; tracked PID $pid did not match backend."
+    return
   fi
   if [[ "$kind" == "frontend" && "$cmd" != *"next"* && "$cmd" != *"npm"* && "$cmd" != *"node"* ]]; then
-    echo "Refusing to stop PID $pid because it does not look like an AIWeb frontend process." >&2
-    exit 1
+    rm -f "$pid_file"
+    echo "AIWeb frontend PID file removed; tracked PID $pid did not match frontend."
+    return
   fi
 
   kill "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
@@ -46,5 +61,5 @@ stop_aiweb_process() {
   echo "AIWeb $kind stopped. PID: $pid"
 }
 
-stop_aiweb_process "$FRONTEND_PID_FILE" "frontend"
-stop_aiweb_process "$BACKEND_PID_FILE" "backend"
+stop_aiweb_process "$FRONTEND_PID_FILE" "frontend" "$PROJECT_ROOT/frontend"
+stop_aiweb_process "$BACKEND_PID_FILE" "backend" "$PROJECT_ROOT/backend"

@@ -154,6 +154,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const token = getAuthToken();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {})
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null);
+    if (payload?.detail) {
+      throw new Error(Array.isArray(payload.detail) ? payload.detail.map((item: { msg?: string }) => item.msg ?? "Request error").join(", ") : payload.detail);
+    }
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "Request failed, please try again later.");
+  }
+
+  return response.blob();
+}
+
+export async function downloadChatAnswerWord(content: string) {
+  const blob = await requestBlob("/api/chat/export-word", {
+    method: "POST",
+    body: JSON.stringify({ content })
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `aiweb-answer-${Date.now()}.docx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function login(payload: { account: string; password: string }) {
   return request<AuthResponse>("/api/auth/login", {
     method: "POST",

@@ -32,7 +32,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="sticky top-0 z-20 flex h-auto w-full flex-col border-b border-border bg-card/76 px-3 py-3 backdrop-blur-2xl lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+    <aside className="site-sidebar sticky top-0 z-20 flex h-auto w-full flex-col border-b border-border bg-card/76 px-3 py-3 backdrop-blur-2xl lg:h-screen lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
       <Link href="/" className="mb-3 flex items-center gap-3 lg:mb-7">
         <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[#1A1A1A] text-white shadow-soft dark:bg-white dark:text-[#1A1A1A]">
           <Sparkles className="h-5 w-5" />
