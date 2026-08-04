@@ -10,7 +10,7 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from database.models import ImageJob, ImageJobReference, ImageRecord, UserAccount
+from database.models import ImageJob, ImageJobReference, ImageRecord, UserAccount, WorkflowRun
 from database.session import get_db
 from models.schemas import ImageJobOut, ImageRecordOut, ImageRequest, ImageResponse
 from services.auth_service import current_user
@@ -101,6 +101,26 @@ def image_job_to_out(job: ImageJob, db: Session) -> ImageJobOut:
 @router.get("/images", response_model=list[ImageRecordOut])
 def images(db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> list[ImageRecordOut]:
     return db.query(ImageRecord).filter(ImageRecord.user_id == user.id).order_by(desc(ImageRecord.created_at)).limit(10).all()
+
+
+@router.delete("/images/{record_id}")
+def delete_image_record(
+    record_id: int,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> dict[str, str]:
+    record = db.get(ImageRecord, record_id)
+    if record is None or record.user_id != user.id:
+        raise HTTPException(status_code=404, detail="图片记录不存在。")
+    db.query(ImageJob).filter(ImageJob.image_record_id == record.id).update(
+        {ImageJob.image_record_id: None}, synchronize_session=False
+    )
+    db.query(WorkflowRun).filter(WorkflowRun.image_record_id == record.id).update(
+        {WorkflowRun.image_record_id: None}, synchronize_session=False
+    )
+    db.delete(record)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/image/jobs/{job_id}", response_model=ImageJobOut)

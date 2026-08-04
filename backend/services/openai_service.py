@@ -1,6 +1,7 @@
 import base64
 import logging
 import time
+from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -314,6 +315,86 @@ class OpenAIService:
                 fallback_text=self._fallback_prompt_text(message, history, attachments),
             )
         raise OpenAIServiceError("模型返回了空回复")
+
+    def chat_stream(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream a text-only chat completion and finish with usage metadata.
+
+        The method deliberately uses Chat Completions because both OpenAI and
+        Grok expose its streaming protocol. Attachments remain on the existing
+        non-streaming/job paths until multimodal streaming is consistently
+        supported by every configured gateway.
+        """
+
+        fallback_text = self._fallback_prompt_text(message, history, None)
+        response_stream: Any = None
+        text_parts: list[str] = []
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        try:
+            request_payload = {
+                "model": self.text_model,
+                "messages": self._chat_completion_messages(message, history, None, multimodal=False),
+                "stream": True,
+            }
+            try:
+                response_stream = self.client.chat.completions.create(
+                    **request_payload,
+                    stream_options={"include_usage": True},
+                )
+            except OpenAIError as exc:
+                if getattr(exc, "status_code", None) not in {400, 422}:
+                    raise
+                logger.info(
+                    "%s streaming endpoint rejected stream_options; retrying without usage chunks",
+                    self.provider,
+                )
+                response_stream = self.client.chat.completions.create(**request_payload)
+            for chunk in response_stream:
+                chunk_usage = extract_usage_dict(chunk)
+                if chunk_usage["total_tokens"] > 0:
+                    usage = chunk_usage
+
+                choices = getattr(chunk, "choices", None) or []
+                choice = choices[0] if choices else None
+                delta = getattr(choice, "delta", None) if choice is not None else None
+                content = getattr(delta, "content", None) if delta is not None else None
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    yield {"type": "delta", "text": content}
+
+            text = "".join(text_parts)
+            if not text.strip():
+                raise OpenAIServiceError("模型返回了空回复")
+
+            if usage["total_tokens"] <= 0:
+                prompt_tokens = estimate_text_tokens(fallback_text)
+                completion_tokens = estimate_text_tokens(text)
+                usage = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+            yield {
+                "type": "done",
+                "model": self.text_model,
+                "prompt_tokens": usage["prompt_tokens"],
+                "completion_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+            }
+        except OpenAIServiceError:
+            raise
+        except OpenAIError as exc:
+            raise OpenAIServiceError(str(exc)) from exc
+        finally:
+            close_stream = getattr(response_stream, "close", None)
+            if callable(close_stream):
+                try:
+                    close_stream()
+                except Exception:
+                    logger.warning("Failed to close %s chat stream cleanly", self.provider, exc_info=True)
 
     def chat(
         self,

@@ -19,11 +19,11 @@ function applyBackground(background: BackgroundStyle) {
 }
 
 export function BackgroundProvider({ children }: { children: React.ReactNode }) {
-  const [background, setBackgroundState] = useState<BackgroundStyle>("portrait");
+  const [background, setBackgroundState] = useState<BackgroundStyle>("classic");
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    const initialBackground: BackgroundStyle = stored === "classic" ? "classic" : "portrait";
+    const initialBackground: BackgroundStyle = stored === "portrait" ? "portrait" : "classic";
 
     setBackgroundState(initialBackground);
     document.documentElement.dataset.background = initialBackground;

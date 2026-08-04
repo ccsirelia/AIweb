@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Download, ImageIcon, Loader2, Mail, ShieldCheck, UserRound, WalletCards } from "lucide-react";
+import { CalendarDays, Download, ImageIcon, KeyRound, Loader2, Mail, ShieldCheck, UserRound, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 
-import { getAccountProfile, getAuthToken, type AccountProfile, type ImageRecord } from "@/lib/api";
+import { changePassword, getAccountProfile, getAuthToken, setAuthSession, type AccountProfile, type ImageRecord } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -40,6 +40,33 @@ export function AccountProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
+
+  async function submitPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const currentPassword = String(data.get("current_password") || "");
+    const newPassword = String(data.get("new_password") || "");
+    const confirmPassword = String(data.get("confirm_password") || "");
+    if (newPassword !== confirmPassword) {
+      toast.error("两次输入的新密码不一致。");
+      return;
+    }
+    setPasswordLoading(true);
+    try {
+      const session = await changePassword({ current_password: currentPassword, new_password: newPassword });
+      setAuthSession(session);
+      form.reset();
+      setPasswordOpen(false);
+      toast.success("密码已更新。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "密码修改失败。");
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -127,6 +154,45 @@ export function AccountProfilePage() {
           <StatCard label="最近 7 天" value={profile.token_usage.last_7_days_tokens} desc="近 7 天对话和生图合计消耗" />
           <StatCard label="最近 24 小时" value={profile.token_usage.last_24_hours_tokens} desc="过去 24 小时内的活跃消耗" />
         </div>
+
+        <Card className="overflow-hidden">
+          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="grid h-9 w-9 place-items-center rounded-md bg-[#2DD4BF]/10 text-[#2DD4BF]">
+                <KeyRound className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold">登录密码</h3>
+                <p className="mt-1 text-xs text-muted-foreground">定期更新密码可降低账号风险。</p>
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => setPasswordOpen((value) => !value)}>
+              {passwordOpen ? "收起" : "修改密码"}
+            </Button>
+          </div>
+          {passwordOpen ? (
+            <form onSubmit={submitPassword} className="grid gap-3 border-t border-border bg-background/35 p-5 md:grid-cols-3">
+              <label className="text-xs font-medium text-muted-foreground">
+                当前密码
+                <input name="current_password" type="password" required autoComplete="current-password" className="mt-2 h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-[#2DD4BF]" />
+              </label>
+              <label className="text-xs font-medium text-muted-foreground">
+                新密码
+                <input name="new_password" type="password" required minLength={8} autoComplete="new-password" className="mt-2 h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-[#2DD4BF]" />
+              </label>
+              <label className="text-xs font-medium text-muted-foreground">
+                确认新密码
+                <input name="confirm_password" type="password" required minLength={8} autoComplete="new-password" className="mt-2 h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-[#2DD4BF]" />
+              </label>
+              <div className="md:col-span-3 md:justify-self-end">
+                <Button size="sm" disabled={passwordLoading}>
+                  {passwordLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                  更新密码
+                </Button>
+              </div>
+            </form>
+          ) : null}
+        </Card>
 
         <Card className="p-5">
           <div className="flex items-center justify-between gap-3">

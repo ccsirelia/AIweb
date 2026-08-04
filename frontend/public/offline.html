@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090a0f" />
+    <title>暂时离线 | AIWeb Studio</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        color: #f6f7fb;
+        background: #090a0f;
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        opacity: 0.5;
+        background-image:
+          linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(45,212,191,0.035) 1px, transparent 1px);
+        background-size: 38px 38px;
+        mask-image: linear-gradient(to bottom, #000, transparent 85%);
+      }
+      main {
+        position: relative;
+        width: min(540px, calc(100vw - 32px));
+        padding: 32px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px;
+        background: rgba(20,22,30,0.9);
+        box-shadow: 0 28px 90px rgba(0,0,0,0.48);
+      }
+      .signal { display: flex; align-items: center; gap: 10px; color: #5eead4; font-size: 12px; letter-spacing: 0; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 18px #2dd4bf; }
+      h1 { margin: 24px 0 10px; font-size: 32px; line-height: 1.1; letter-spacing: 0; }
+      p { margin: 0; max-width: 42ch; color: #a9adbb; line-height: 1.7; }
+      button {
+        margin-top: 26px;
+        min-height: 42px;
+        padding: 0 18px;
+        border: 1px solid rgba(91,124,255,0.7);
+        border-radius: 6px;
+        color: #fff;
+        background: #5b7cff;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:focus-visible { outline: 2px solid #5eead4; outline-offset: 3px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="signal"><span class="dot"></span>CONNECTION PAUSED</div>
+      <h1>网络信号暂时中断</h1>
+      <p>AIWeb Studio 没有缓存你的对话、账户或 API 数据。恢复连接后即可继续当前工作。</p>
+      <button type="button" onclick="location.reload()">重新连接</button>
+    </main>
+  </body>
+</html>

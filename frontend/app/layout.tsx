@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import { Toaster } from "sonner";
 
 import { BackgroundProvider } from "@/components/background-provider";
-import { BackgroundToggle } from "@/components/background-toggle";
+import { PwaRegister } from "@/components/pwa-register";
 import { Sidebar } from "@/components/sidebar";
 import { SiteBackdrop } from "@/components/site-backdrop";
+import { SystemAmbient } from "@/components/system-ambient";
+import { TelemetryStrip } from "@/components/telemetry-strip";
 import { ThemeProvider } from "@/components/theme-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { TransparencyControl } from "@/components/transparency-control";
+import { Topbar } from "@/components/topbar";
 import { TransparencyProvider } from "@/components/transparency-provider";
-import { UserAccountButton } from "@/components/user-account-button";
 
 import "./globals.css";
 
@@ -19,7 +20,7 @@ const inter = Inter({ subsets: ["latin"] });
 const backgroundInitScript = `
   try {
     var background = localStorage.getItem("aiweb-background");
-    document.documentElement.dataset.background = background === "classic" ? "classic" : "portrait";
+    document.documentElement.dataset.background = background === "portrait" ? "portrait" : "classic";
     var savedTheme = localStorage.getItem("theme");
     if (savedTheme !== "light" && savedTheme !== "dark") {
       savedTheme = "dark";
@@ -50,42 +51,43 @@ const backgroundInitScript = `
 
 export const metadata: Metadata = {
   title: "AIWeb Studio",
-  description: "A premium AI writing and image creation workspace."
+  description: "集 AI 对话、图像创作与智能工作流于一体的创作工作台。",
+  applicationName: "AIWeb Studio",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icons/icon-192.png"
+  },
+  appleWebApp: {
+    capable: true,
+    title: "AIWeb Studio",
+    statusBarStyle: "black-translucent"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning>
+    <html lang="zh-CN" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
-        <script dangerouslySetInnerHTML={{ __html: backgroundInitScript }} />
+        <Script id="aiweb-appearance-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: backgroundInitScript }} />
       </head>
       <body className={inter.className}>
         <ThemeProvider>
           <BackgroundProvider>
             <TransparencyProvider>
               <SiteBackdrop />
-              <div className="app-shell min-h-screen lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
+              <SystemAmbient />
+              <PwaRegister />
+              <div className="app-shell min-h-screen lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
                 <Sidebar />
-                <main className="min-w-0 px-3 pb-5 pt-3 sm:px-4 lg:px-5 xl:px-6">
-                  <div className="mx-auto flex w-full max-w-[1680px] items-center justify-between pb-4">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                        AIWeb Studio
-                      </p>
-                      <h1 className="mt-0.5 text-xl font-semibold tracking-normal text-foreground sm:text-2xl">
-                        Creation Console
-                      </h1>
-                    </div>
-                    <div className="flex items-center gap-2 sm:gap-3">
-                      <TransparencyControl />
-                      <BackgroundToggle />
-                      <ThemeToggle />
-                      <UserAccountButton />
-                    </div>
+                <main className="min-w-0 px-3 pb-5 pt-3 sm:px-4 lg:px-5 lg:py-5 xl:px-7">
+                  <Topbar />
+                  <div className="mx-auto w-full max-w-[1720px]">
+                    <TelemetryStrip />
+                    <div className="mt-4">{children}</div>
                   </div>
-                  <div className="mx-auto w-full max-w-[1680px]">{children}</div>
                 </main>
-                </div>
+              </div>
               <Toaster richColors position="top-center" />
             </TransparencyProvider>
           </BackgroundProvider>

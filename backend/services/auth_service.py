@@ -16,6 +16,14 @@ AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "aiweb-dev-secret-change-me")
 TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 
 
+def password_fingerprint(password_hash: str) -> str:
+    return hmac.new(
+        AUTH_SECRET_KEY.encode("utf-8"),
+        password_hash.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:24]
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
@@ -43,7 +51,12 @@ def _b64decode(value: str) -> bytes:
 
 
 def create_token(user: UserAccount) -> str:
-    payload = {"sub": user.id, "username": user.username, "exp": int(time.time()) + TOKEN_TTL_SECONDS}
+    payload = {
+        "sub": user.id,
+        "username": user.username,
+        "pwd": password_fingerprint(user.password_hash),
+        "exp": int(time.time()) + TOKEN_TTL_SECONDS,
+    }
     payload_raw = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(AUTH_SECRET_KEY.encode("utf-8"), payload_raw.encode("utf-8"), hashlib.sha256).digest()
     return f"{payload_raw}.{_b64encode(signature)}"
@@ -72,4 +85,10 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> UserAccount
     user = db.get(UserAccount, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="账号不存在或已被禁用。")
+    token_password = payload.get("pwd")
+    if token_password is not None and not hmac.compare_digest(
+        str(token_password),
+        password_fingerprint(user.password_hash),
+    ):
+        raise HTTPException(status_code=401, detail="密码已更新，请重新登录。")
     return user

@@ -1,6 +1,8 @@
+import json
 import logging
 import re
 import uuid
+from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -12,10 +14,11 @@ from starlette.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from database.models import ChatAttachment, ChatJob, ChatMessage, ChatRecord, ChatSession, UserAccount, now_utc
-from database.session import get_db
-from models.schemas import ChatExportRequest, ChatJobOut, ChatModelOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut
+from database.session import SessionLocal, get_db
+from models.schemas import ChatExportRequest, ChatJobOut, ChatModelOut, ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionOut, ChatSessionUpdateRequest
 from services.auth_service import current_user
 from services.chat_context_service import load_recent_chat_history
+from services.chat_job_service import public_chat_error
 from services.chat_model_service import list_active_chat_models, resolve_chat_model
 from services.document_extract import DEFAULT_MAX_CHARS, extract_document_text
 from services.openai_service import OpenAIService, OpenAIServiceError
@@ -69,6 +72,11 @@ IMAGE_MIME_BY_EXT = {
 }
 REQUIRE_EXTRACTED_TEXT_EXTENSIONS = {".docx", ".pdf", ".pptx", ".xlsx"}
 WORD_FONT_NAME = "微软雅黑"
+
+
+def sse_event(event: str, payload: dict[str, Any]) -> str:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
 
 
 def make_session_title(message: str) -> str:
@@ -535,6 +543,25 @@ def chat_session(
     return ChatSessionDetail(session=session, messages=messages)
 
 
+@router.patch("/chat/sessions/{session_id}", response_model=ChatSessionOut)
+def update_chat_session(
+    session_id: int,
+    payload: ChatSessionUpdateRequest,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> ChatSessionOut:
+    session = db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="会话标题不能为空。")
+    session.title = title
+    db.commit()
+    db.refresh(session)
+    return session
+
+
 @router.delete("/chat/sessions/{session_id}")
 def delete_chat_session(
     session_id: int,
@@ -630,6 +657,8 @@ def chat(
 ) -> ChatResponse:
     """Synchronous chat (compatibility). Prefer POST /api/chat/jobs for production UI."""
     user_message = payload.message.strip()
+    if not user_message:
+        raise HTTPException(status_code=422, detail="Please enter a message.")
     session = db.get(ChatSession, payload.session_id) if payload.session_id else None
     if session is not None and session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Chat session not found.")
@@ -668,3 +697,192 @@ def chat(
     except OpenAIServiceError as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/chat/stream", dependencies=[Depends(rate_limiter)])
+def stream_chat(
+    payload: ChatRequest,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> StreamingResponse:
+    """Stream text-only chat through SSE while preserving conversation history."""
+
+    user_message = payload.message.strip()
+    if not user_message:
+        raise HTTPException(status_code=422, detail="Please enter a message.")
+    provider = normalize_provider(payload.provider)
+    try:
+        selected_model = resolve_chat_model(db, provider, payload.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    session = db.get(ChatSession, payload.session_id) if payload.session_id is not None else None
+    if payload.session_id is not None and (session is None or session.user_id != user.id):
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    if session is None:
+        session = ChatSession(title=make_session_title(user_message), user_id=user.id)
+        db.add(session)
+        db.flush()
+
+    message = ChatMessage(session_id=session.id, role="user", content=user_message)
+    db.add(message)
+    session.updated_at = now_utc()
+    db.commit()
+    db.refresh(message)
+
+    session_id = int(session.id)
+    message_id = int(message.id)
+    user_id = int(user.id)
+
+    def event_stream() -> Iterator[str]:
+        stream_db = SessionLocal()
+        text_parts: list[str] = []
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        result_model = selected_model
+        assistant_persisted = False
+        try:
+            stream_session = stream_db.get(ChatSession, session_id)
+            stream_message = stream_db.get(ChatMessage, message_id)
+            if (
+                stream_session is None
+                or stream_session.user_id != user_id
+                or stream_message is None
+                or stream_message.session_id != session_id
+            ):
+                raise OpenAIServiceError("聊天会话不存在或已被删除。")
+
+            history = load_recent_chat_history(
+                stream_db,
+                session_id,
+                before_message_id=message_id,
+            )
+            service = OpenAIService(provider=provider, text_model=selected_model)
+            yield sse_event(
+                "meta",
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "model": service.text_model,
+                },
+            )
+
+            result_model = service.text_model
+
+            def persist_assistant(
+                assistant_text: str,
+                *,
+                model_name: str,
+                token_usage: dict[str, int],
+                include_usage: bool,
+            ) -> int:
+                assistant_message = ChatMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=assistant_text,
+                )
+                stream_db.add(assistant_message)
+                stream_db.add(
+                    ChatRecord(
+                        user_id=user_id,
+                        user_message=stream_message.content,
+                        ai_response=assistant_text,
+                    )
+                )
+                if include_usage:
+                    record_token_usage(
+                        stream_db,
+                        user_id=user_id,
+                        source="chat",
+                        provider=provider,
+                        model=model_name,
+                        prompt_tokens=token_usage["prompt_tokens"],
+                        completion_tokens=token_usage["completion_tokens"],
+                        total_tokens=token_usage["total_tokens"],
+                    )
+                stream_session.updated_at = now_utc()
+                stream_db.flush()
+                persisted_message_id = int(assistant_message.id)
+                stream_db.commit()
+                return persisted_message_id
+
+            for stream_item in service.chat_stream(stream_message.content, history=history):
+                if stream_item.get("type") == "delta":
+                    text = str(stream_item.get("text") or "")
+                    if text:
+                        text_parts.append(text)
+                        yield sse_event("delta", {"text": text})
+                    continue
+
+                if stream_item.get("type") == "done":
+                    result_model = str(stream_item.get("model") or service.text_model)
+                    usage = {
+                        "prompt_tokens": int(stream_item.get("prompt_tokens") or 0),
+                        "completion_tokens": int(stream_item.get("completion_tokens") or 0),
+                        "total_tokens": int(stream_item.get("total_tokens") or 0),
+                    }
+
+            assistant_text = "".join(text_parts).strip()
+            if not assistant_text:
+                raise OpenAIServiceError("模型返回了空回复")
+
+            assistant_message_id = persist_assistant(
+                assistant_text,
+                model_name=result_model,
+                token_usage=usage,
+                include_usage=True,
+            )
+            assistant_persisted = True
+            yield sse_event(
+                "done",
+                {
+                    "session_id": session_id,
+                    "message_id": assistant_message_id,
+                    "model": result_model,
+                    "usage": usage,
+                },
+            )
+        except GeneratorExit:
+            if text_parts and not assistant_persisted:
+                partial_text = "".join(text_parts).strip()
+                if partial_text:
+                    try:
+                        persist_assistant(
+                            partial_text,
+                            model_name=result_model,
+                            token_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                            include_usage=False,
+                        )
+                        logger.info("Saved interrupted chat output for session_id=%s", session_id)
+                    except Exception:
+                        stream_db.rollback()
+                        logger.exception("Failed to save interrupted chat output for session_id=%s", session_id)
+            raise
+        except Exception as exc:
+            logger.exception("Streaming chat failed for session_id=%s", session_id)
+            stream_db.rollback()
+            if text_parts and not assistant_persisted:
+                partial_text = "".join(text_parts).strip()
+                if partial_text:
+                    try:
+                        persist_assistant(
+                            partial_text,
+                            model_name=result_model,
+                            token_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                            include_usage=False,
+                        )
+                    except Exception:
+                        stream_db.rollback()
+                        logger.exception("Failed to save partial chat output for session_id=%s", session_id)
+            yield sse_event("error", {"message": public_chat_error(exc)})
+        finally:
+            stream_db.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "X-Session-Id": str(session_id),
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )

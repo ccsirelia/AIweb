@@ -6,15 +6,17 @@ from database.models import UserAccount
 from database.session import get_db
 from models.schemas import AuthResponse, LoginRequest, RegisterRequest, UserOut
 from services.auth_service import create_token, current_user, hash_password, verify_password
+from services.rate_limit import InMemoryRateLimiter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+auth_rate_limiter = InMemoryRateLimiter(limit=10, key_by_user=False)
 
 
 def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
-@router.post("/register", response_model=AuthResponse)
+@router.post("/register", response_model=AuthResponse, dependencies=[Depends(auth_rate_limiter)])
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
     username = normalize_username(payload.username)
     email = payload.email.strip().lower()
@@ -36,7 +38,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
     return AuthResponse(token=create_token(user), user=user)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, dependencies=[Depends(auth_rate_limiter)])
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
     account = payload.account.strip().lower()
     user = db.query(UserAccount).filter(or_(UserAccount.username == account, UserAccount.email == account)).first()

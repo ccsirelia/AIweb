@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from database.models import UserAccount
-from services.auth_service import AUTH_SECRET_KEY
+from services.auth_service import AUTH_SECRET_KEY, password_fingerprint
 
 ADMIN_SESSION_COOKIE = "aiweb_admin_session"
 ADMIN_CSRF_COOKIE = "aiweb_admin_csrf"
@@ -40,6 +40,7 @@ def create_admin_session_token(user: UserAccount) -> str:
         "sub": user.id,
         "username": user.username,
         "typ": "admin_session",
+        "pwd": password_fingerprint(user.password_hash),
         "exp": int(time.time()) + ADMIN_SESSION_TTL_SECONDS,
     }
     payload_raw = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
@@ -82,6 +83,12 @@ def get_admin_user(request: Request, db: Session) -> Optional[UserAccount]:
     except Exception:
         return None
     if user is None or not user.is_active or user.role != "admin":
+        return None
+    token_password = payload.get("pwd")
+    if token_password is not None and not hmac.compare_digest(
+        str(token_password),
+        password_fingerprint(user.password_hash),
+    ):
         return None
     return user
 

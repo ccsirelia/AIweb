@@ -2,20 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, ImageIcon, ImagePlus, Images, Loader2, RefreshCcw, Type, Upload, WandSparkles, X } from "lucide-react";
+import { Download, ImageIcon, ImagePlus, Images, Loader2, RefreshCcw, Save, Trash2, Type, Upload, WandSparkles, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
 import {
   createImageJob,
+  ApiError,
+  deleteImage,
   getAuthToken,
   getImageJob,
   getRecentImages,
+  getStoredUser,
   type ImageJob,
   type ImageRecord,
   type Provider
 } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
+import { WorkflowPicker } from "@/components/workflow-picker";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,10 +46,14 @@ type ReferenceImage = { id: string; file: File; preview: string };
 
 const IMAGE_PROVIDER_KEY = "aiweb_image_provider";
 const PENDING_IMAGE_JOBS_KEY = "aiweb_pending_image_jobs";
+const IMAGE_DRAFT_KEY = "aiweb_image_draft_v1";
+const PENDING_PROMPT_KEY = "aiweb:pending-prompt";
+const PROMPT_INSERT_EVENT = "aiweb:prompt-insert";
+const IMAGE_PROMPT_LIMIT = 1200;
 
 function readPendingImageJobs(): ImageJob[] {
   if (typeof window === "undefined") return [];
-  const raw = localStorage.getItem(PENDING_IMAGE_JOBS_KEY);
+  const raw = readMigratedUserStorageValue(PENDING_IMAGE_JOBS_KEY).value;
   if (!raw) return [];
   try {
     return JSON.parse(raw) as ImageJob[];
@@ -55,7 +63,39 @@ function readPendingImageJobs(): ImageJob[] {
 }
 
 function writePendingImageJobs(jobs: ImageJob[]) {
-  localStorage.setItem(PENDING_IMAGE_JOBS_KEY, JSON.stringify(jobs));
+  const key = getUserStorageKey(PENDING_IMAGE_JOBS_KEY);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(jobs));
+  } catch {
+    // The server remains authoritative when browser storage is unavailable.
+  }
+}
+
+function getUserStorageKey(baseKey: string): string | null {
+  const userId = getStoredUser()?.id;
+  return Number.isInteger(userId) ? `${baseKey}:user:${userId}` : null;
+}
+
+function readMigratedUserStorageValue(baseKey: string): { key: string | null; value: string } {
+  const key = getUserStorageKey(baseKey);
+  if (!key) return { key: null, value: "" };
+  try {
+    const scopedValue = localStorage.getItem(key);
+    const legacyValue = localStorage.getItem(baseKey);
+    if (scopedValue !== null) {
+      if (legacyValue !== null) localStorage.removeItem(baseKey);
+      return { key, value: scopedValue };
+    }
+    if (legacyValue !== null) {
+      localStorage.setItem(key, legacyValue);
+      localStorage.removeItem(baseKey);
+      return { key, value: legacyValue };
+    }
+  } catch {
+    return { key, value: "" };
+  }
+  return { key, value: "" };
 }
 
 function validateImage2Size(width: number, height: number) {
@@ -76,6 +116,15 @@ function downloadBase64(imageBase64: string, name = `aiweb-image-${Date.now()}.p
   link.click();
 }
 
+function createReferenceImageId(file: File) {
+  const uniquePart =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+  return `${file.name}-${file.size}-${file.lastModified}-${uniquePart}`;
+}
+
 export function ImageStudio() {
   const [mode, setMode] = useState<ImageMode>("text_to_image");
   const [prompt, setPrompt] = useState("");
@@ -90,9 +139,13 @@ export function ImageStudio() {
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
+  const [deletingImageId, setDeletingImageId] = useState<number | null>(null);
   const [pendingJobs, setPendingJobs] = useState<ImageJob[]>([]);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const referenceImagesRef = useRef<ReferenceImage[]>([]);
+  const pollingRef = useRef(false);
+  const draftReadyRef = useRef(false);
+  const draftStorageKeyRef = useRef<string | null>(null);
   const [draggingReferences, setDraggingReferences] = useState(false);
   const router = useRouter();
 
@@ -125,7 +178,7 @@ export function ImageStudio() {
     setReferenceImages((current) => [
       ...current,
       ...accepted.slice(0, remaining).map((file) => ({
-        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+        id: createReferenceImageId(file),
         file,
         preview: URL.createObjectURL(file)
       }))
@@ -146,6 +199,59 @@ export function ImageStudio() {
       return;
     }
     const storedProvider = localStorage.getItem(IMAGE_PROVIDER_KEY);
+    const storedDraft = readMigratedUserStorageValue(IMAGE_DRAFT_KEY);
+    draftStorageKeyRef.current = storedDraft.key;
+    const templatePrompt = new URLSearchParams(window.location.search).get("prompt");
+    let initialPrompt = "";
+    let incomingPromptRejected = false;
+    let initialPromptIsDraft = false;
+    if (templatePrompt) {
+      const normalizedTemplatePrompt = templatePrompt.trim();
+      if (normalizedTemplatePrompt.length > IMAGE_PROMPT_LIMIT) {
+        incomingPromptRejected = true;
+        toast.error(`传入的 Prompt 超过 ${IMAGE_PROMPT_LIMIT} 个字符，未载入输入区。`);
+      } else {
+        initialPrompt = normalizedTemplatePrompt;
+      }
+    }
+    if (!initialPrompt && !incomingPromptRejected) {
+      try {
+        const rawPending = sessionStorage.getItem(PENDING_PROMPT_KEY);
+        const pending = JSON.parse(rawPending ?? "null") as { prompt?: unknown; target?: unknown; workflowId?: unknown } | null;
+        if (pending?.target === "image" && typeof pending.prompt === "string") {
+          sessionStorage.removeItem(PENDING_PROMPT_KEY);
+          const normalizedPendingPrompt = pending.prompt.trim();
+          if (normalizedPendingPrompt.length > IMAGE_PROMPT_LIMIT) {
+            incomingPromptRejected = true;
+            toast.error(`工作流 Prompt 超过 ${IMAGE_PROMPT_LIMIT} 个字符，未载入输入区。`);
+          } else {
+            initialPrompt = normalizedPendingPrompt;
+          }
+        } else if (rawPending && (typeof pending?.prompt !== "string" || (pending?.target !== "chat" && pending?.target !== "image"))) {
+          sessionStorage.removeItem(PENDING_PROMPT_KEY);
+        }
+      } catch {
+        sessionStorage.removeItem(PENDING_PROMPT_KEY);
+      }
+    }
+    if (!initialPrompt && !incomingPromptRejected) {
+      initialPrompt = storedDraft.value.trim();
+      initialPromptIsDraft = Boolean(initialPrompt);
+    }
+    if (initialPrompt) {
+      if (initialPrompt.length > IMAGE_PROMPT_LIMIT) {
+        toast.error(`已保存的视觉草稿超过 ${IMAGE_PROMPT_LIMIT} 个字符，请精简后再生成。`);
+        if (initialPromptIsDraft) setPrompt(initialPrompt);
+      } else {
+        setPrompt(initialPrompt);
+      }
+    }
+    draftReadyRef.current = true;
+    if (templatePrompt) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("prompt");
+      window.history.replaceState({}, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    }
     // Accept legacy misspelling "gork".
     if (storedProvider === "openai" || storedProvider === "grok" || storedProvider === "gork") {
       const nextProvider = storedProvider === "gork" ? "grok" : storedProvider;
@@ -165,6 +271,35 @@ export function ImageStudio() {
   }, [router]);
 
   useEffect(() => {
+    const insertPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<{ prompt?: unknown; target?: unknown }>).detail;
+      if (detail?.target !== "image" || typeof detail.prompt !== "string") return;
+      sessionStorage.removeItem(PENDING_PROMPT_KEY);
+      const normalizedPrompt = detail.prompt.trim();
+      if (normalizedPrompt.length > IMAGE_PROMPT_LIMIT) {
+        toast.error(`Prompt 超过 ${IMAGE_PROMPT_LIMIT} 个字符，未载入输入区。`);
+        return;
+      }
+      setPrompt(normalizedPrompt);
+      toast.success("灵感已送入视觉输入区");
+    };
+    window.addEventListener(PROMPT_INSERT_EVENT, insertPrompt);
+    return () => window.removeEventListener(PROMPT_INSERT_EVENT, insertPrompt);
+  }, []);
+
+  useEffect(() => {
+    if (!draftReadyRef.current) return;
+    const key = draftStorageKeyRef.current;
+    if (!key) return;
+    try {
+      if (prompt) localStorage.setItem(key, prompt);
+      else localStorage.removeItem(key);
+    } catch {
+      // Keep the editor usable when browser storage is unavailable.
+    }
+  }, [prompt]);
+
+  useEffect(() => {
     if (pendingJobs.length === 0) return;
     const timer = window.setInterval(() => {
       pollPendingJobs();
@@ -174,38 +309,44 @@ export function ImageStudio() {
   }, [pendingJobs.length]);
 
   async function pollPendingJobs() {
-    const jobs = readPendingImageJobs();
-    if (jobs.length === 0) {
-      setPendingJobs([]);
-      setLoading(false);
-      return;
-    }
-
-    const nextJobs: ImageJob[] = [];
-    let completedImage = "";
-    let shouldRefresh = false;
-    for (const job of jobs) {
-      try {
-        const latest = await getImageJob(job.id);
-        if (latest.status === "completed") {
-          shouldRefresh = true;
-          if (latest.image_base64) completedImage = latest.image_base64;
-        } else if (latest.status === "failed") {
-          toast.error(latest.error || "图片生成失败。");
-        } else {
-          nextJobs.push(latest);
-        }
-      } catch {
-        nextJobs.push(job);
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    try {
+      const jobs = readPendingImageJobs();
+      if (jobs.length === 0) {
+        setPendingJobs([]);
+        setLoading(false);
+        return;
       }
-    }
-    writePendingImageJobs(nextJobs);
-    setPendingJobs(nextJobs);
-    setLoading(nextJobs.length > 0);
-    if (completedImage) setImage(completedImage);
-    if (shouldRefresh) {
-      await refreshImages();
-      if (completedImage) toast.success("图片生成完成。");
+
+      const nextJobs: ImageJob[] = [];
+      let completedImage = "";
+      let shouldRefresh = false;
+      for (const job of jobs) {
+        try {
+          const latest = await getImageJob(job.id);
+          if (latest.status === "completed") {
+            shouldRefresh = true;
+            if (latest.image_base64) completedImage = latest.image_base64;
+          } else if (latest.status === "failed") {
+            toast.error(latest.error || "图片生成失败。");
+          } else {
+            nextJobs.push(latest);
+          }
+        } catch (error) {
+          if (!(error instanceof ApiError) || ![401, 404].includes(error.status)) nextJobs.push(job);
+        }
+      }
+      writePendingImageJobs(nextJobs);
+      setPendingJobs(nextJobs);
+      setLoading(nextJobs.length > 0);
+      if (completedImage) setImage(completedImage);
+      if (shouldRefresh) {
+        await refreshImages();
+        if (completedImage) toast.success("图片生成完成。");
+      }
+    } finally {
+      pollingRef.current = false;
     }
   }
 
@@ -235,6 +376,23 @@ export function ImageStudio() {
       toast.error(error instanceof Error ? error.message : "图片历史加载失败。");
     } finally {
       setHistoryLoading(false);
+    }
+  }
+
+  async function removeHistoryImage(record: ImageRecord) {
+    if (!window.confirm("确定删除这张图片吗？删除后无法恢复。")) return;
+
+    setDeletingImageId(record.id);
+    try {
+      await deleteImage(record.id);
+      const nextImages = recentImages.filter((item) => item.id !== record.id);
+      setRecentImages(nextImages);
+      setImage((current) => (current === record.image_base64 ? nextImages[0]?.image_base64 ?? "" : current));
+      toast.success("图片已删除。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "图片删除失败。");
+    } finally {
+      setDeletingImageId(null);
     }
   }
 
@@ -307,14 +465,14 @@ export function ImageStudio() {
 
   return (
     <PageShell>
-      <div className="grid h-auto min-h-[calc(100dvh-7.25rem)] gap-4 lg:gap-5 xl:grid-cols-[minmax(300px,0.95fr)_minmax(0,1.65fr)_320px] xl:items-stretch">
+      <div className="grid h-auto min-h-[calc(100dvh-10rem)] gap-4 lg:gap-5 xl:grid-cols-[minmax(300px,0.95fr)_minmax(0,1.65fr)_320px] xl:items-stretch">
         <Card className="flex min-h-0 flex-col p-4 sm:p-5">
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#5B7CFF]/10 text-[#5B7CFF]">
               <WandSparkles className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold tracking-tight">AI Image Studio</h2>
+              <h2 className="text-lg font-semibold">AI Image Studio</h2>
               <p className="text-sm text-muted-foreground">通道生图 · 异步任务队列</p>
             </div>
           </div>
@@ -432,15 +590,32 @@ export function ImageStudio() {
             )}
 
             <div className="flex min-h-0 flex-1 flex-col">
-              <label className="text-sm font-medium">{mode === "image_to_image" ? "编辑指令" : "Prompt"}</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-medium">{mode === "image_to_image" ? "编辑指令" : "Prompt"}</label>
+                <WorkflowPicker
+                  target="image"
+                  buttonLabel="视觉工作流"
+                  onApply={(compiledPrompt) => {
+                    const normalizedPrompt = compiledPrompt.trim();
+                    if (normalizedPrompt.length > IMAGE_PROMPT_LIMIT) {
+                      toast.error(`工作流编译结果超过 ${IMAGE_PROMPT_LIMIT} 个字符，请精简变量后重试。`);
+                      return;
+                    }
+                    setPrompt(normalizedPrompt);
+                  }}
+                />
+              </div>
               <Textarea
                 value={prompt}
-                maxLength={1200}
+                maxLength={IMAGE_PROMPT_LIMIT}
                 className="mt-2 min-h-[140px] flex-1"
                 placeholder={mode === "image_to_image" ? "例如：保留人物特征，将场景改为雨夜霓虹街道..." : "一只穿宇航服的橘猫，赛博朋克风格，电影感灯光..."}
                 onChange={(event) => setPrompt(event.target.value)}
               />
-              <div className="mt-2 text-right text-xs text-muted-foreground">{prompt.length}/1200</div>
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                {prompt ? <span className="inline-flex items-center gap-1 text-[10px] text-[#2DD4BF]"><Save className="h-3 w-3" />草稿已存</span> : <span />}
+                <span className="tabular-nums">{prompt.length}/{IMAGE_PROMPT_LIMIT}</span>
+              </div>
             </div>
 
             <div>
@@ -555,7 +730,7 @@ export function ImageStudio() {
         <Card className="flex min-h-[560px] flex-col overflow-hidden p-4 sm:min-h-[640px] sm:p-5 xl:min-h-0">
           <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold tracking-tight">预览</h2>
+              <h2 className="text-lg font-semibold">预览</h2>
               <p className="mt-0.5 text-sm text-muted-foreground">{image ? "生成结果已准备好。" : "输入 Prompt 后开始创作。"}</p>
             </div>
             {image && (
@@ -593,7 +768,7 @@ export function ImageStudio() {
           </div>
         </Card>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden p-4 sm:p-5 xl:max-h-[calc(100dvh-7.25rem)]">
+        <Card className="flex min-h-0 flex-col overflow-hidden p-4 sm:p-5 xl:max-h-[calc(100dvh-10rem)]">
           <div className="flex shrink-0 items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">最近生成</h3>
@@ -631,10 +806,29 @@ export function ImageStudio() {
                     <div className="mt-1 text-xs text-muted-foreground">
                       {record.mode === "image_to_image" ? `图生图 · ${record.reference_count} 张` : "文生图"} · {record.style} · {record.size}
                     </div>
-                    <Button variant="ghost" size="sm" className="mt-1.5 h-8 px-2" onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}>
-                      <Download className="h-3.5 w-3.5" />
-                      原图
-                    </Button>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}
+                        aria-label="下载原图"
+                        title="下载原图"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-red-500 hover:bg-red-500/10 hover:text-red-500"
+                        onClick={() => removeHistoryImage(record)}
+                        disabled={deletingImageId !== null}
+                        aria-label="删除图片"
+                        title="删除图片"
+                      >
+                        {deletingImageId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))

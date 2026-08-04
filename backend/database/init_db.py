@@ -16,6 +16,9 @@ from database.models import (
     ImageRecord,
     TokenUsageRecord,
     UserAccount,
+    WorkflowRun,
+    WorkflowRunNode,
+    WorkflowSchedule,
 )
 from database.session import Base, engine
 
@@ -92,6 +95,32 @@ def migrate_sqlite_schema() -> None:
         if "model" not in job_columns:
             _run_sql("ALTER TABLE chat_jobs ADD COLUMN model VARCHAR(160) NOT NULL DEFAULT ''")
         _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_jobs_model ON chat_jobs (model)")
+
+    if _table_exists("workflow_runs"):
+        workflow_run_columns = _columns("workflow_runs")
+        if "target" not in workflow_run_columns:
+            _run_sql("ALTER TABLE workflow_runs ADD COLUMN target VARCHAR(16) NOT NULL DEFAULT 'chat'")
+        if "image_record_id" not in workflow_run_columns:
+            _run_sql("ALTER TABLE workflow_runs ADD COLUMN image_record_id INTEGER")
+        _run_sql(
+            "UPDATE workflow_runs SET target = 'chat' "
+            "WHERE target IS NULL OR target NOT IN ('chat', 'image')"
+        )
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_workflow_runs_target ON workflow_runs (target)")
+        _run_sql(
+            "CREATE INDEX IF NOT EXISTS ix_workflow_runs_image_record_id "
+            "ON workflow_runs (image_record_id)"
+        )
+
+    if _table_exists("workflow_schedules"):
+        workflow_schedule_columns = _columns("workflow_schedules")
+        if "target" not in workflow_schedule_columns:
+            _run_sql("ALTER TABLE workflow_schedules ADD COLUMN target VARCHAR(16) NOT NULL DEFAULT 'chat'")
+        _run_sql(
+            "UPDATE workflow_schedules SET target = 'chat' "
+            "WHERE target IS NULL OR target NOT IN ('chat', 'image')"
+        )
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_workflow_schedules_target ON workflow_schedules (target)")
 
     # Rename legacy provider misspelling gork → grok in job/usage tables.
     if _table_exists("chat_jobs"):

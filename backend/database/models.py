@@ -168,3 +168,85 @@ class TokenUsageRecord(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    workflow_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(String(16), nullable=False, default="chat", index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    steps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="sequential", index=True)
+    approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quality_gate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    current_node_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    final_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    image_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("image_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    quality_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_requested")
+    quality_feedback: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkflowRunNode(Base):
+    __tablename__ = "workflow_run_nodes"
+    __table_args__ = (UniqueConstraint("run_id", "node_key", name="uq_workflow_run_nodes_run_node_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(24), nullable=False, default="step")
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    output_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkflowSchedule(Base):
+    __tablename__ = "workflow_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    workflow_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(String(16), nullable=False, default="chat", index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    steps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="sequential")
+    approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quality_gate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    schedule_type: Mapped[str] = mapped_column(String(20), nullable=False, default="once", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_id: Mapped[int | None] = mapped_column(ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)

@@ -53,6 +53,28 @@ export type ChatModel = {
   is_default: boolean;
 };
 
+export type ArenaContestant = {
+  provider: Provider;
+  model?: string | null;
+  role?: string;
+};
+
+export type ArenaTokenUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+export type ArenaResult = {
+  contestant_index: number;
+  text: string;
+  model: string;
+  provider: Provider;
+  latency_ms: number;
+  tokens: ArenaTokenUsage;
+  error: string | null;
+};
+
 export type ImageJob = {
   id: number;
   status: "pending" | "running" | "completed" | "failed";
@@ -97,7 +119,62 @@ export type AccountProfile = {
   recent_images: ImageRecord[];
 };
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8008").replace(/\/$/, "");
+export type HealthStatus = {
+  status: string;
+};
+
+export type ChatStreamMeta = {
+  session_id: number;
+  provider: Provider;
+  model: string;
+};
+
+export type ChatStreamUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+export type ChatStreamDone = {
+  session_id: number;
+  message_id: number;
+  model: string;
+  usage: ChatStreamUsage;
+};
+
+export type ChatStreamOptions = {
+  message: string;
+  sessionId?: number | null;
+  provider?: Provider;
+  model?: string;
+  signal?: AbortSignal;
+  onSessionId?: (sessionId: number) => void;
+  onMeta?: (meta: ChatStreamMeta) => void;
+  onDelta?: (text: string) => void;
+  onDone?: (result: ChatStreamDone) => void;
+};
+
+export const AUTH_CHANGED_EVENT = "aiweb-auth-changed";
+export const AUTH_WILL_CHANGE_EVENT = "aiweb-auth-will-change";
+const PENDING_PROMPT_STORAGE_KEY = "aiweb:pending-prompt";
+const PENDING_ARTIFACT_STORAGE_KEY = "aiweb:pending-artifact";
+const PENDING_WORKFLOW_RUNTIME_KEY = "aiweb:workflow-runtime-handoff";
+
+function clearPendingCrossPageData() {
+  sessionStorage.removeItem(PENDING_PROMPT_STORAGE_KEY);
+  sessionStorage.removeItem(PENDING_ARTIFACT_STORAGE_KEY);
+  sessionStorage.removeItem(PENDING_WORKFLOW_RUNTIME_KEY);
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// Browser requests stay same-origin; Next.js resolves the private backend.
+const API_BASE_URL = "";
 
 export function getAuthToken() {
   if (typeof window === "undefined") return "";
@@ -105,13 +182,22 @@ export function getAuthToken() {
 }
 
 export function setAuthSession(payload: AuthResponse) {
+  const previousUser = getStoredUser();
+  window.dispatchEvent(new Event(AUTH_WILL_CHANGE_EVENT));
+  if (previousUser && previousUser.id !== payload.user.id) {
+    clearPendingCrossPageData();
+  }
   localStorage.setItem("aiweb_token", payload.token);
   localStorage.setItem("aiweb_user", JSON.stringify(payload.user));
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function clearAuthSession() {
+  window.dispatchEvent(new Event(AUTH_WILL_CHANGE_EVENT));
   localStorage.removeItem("aiweb_token");
   localStorage.removeItem("aiweb_user");
+  clearPendingCrossPageData();
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function getStoredUser(): User | null {
@@ -144,11 +230,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const detail = Array.isArray(payload.detail)
         ? payload.detail.map((item: { msg?: string }) => item.msg ?? "请求参数错误").join("；")
         : payload.detail;
-      throw new Error(detail);
+      if (response.status === 401) clearAuthSession();
+      throw new ApiError(detail, response.status);
     }
 
     const text = await response.text().catch(() => "");
-    throw new Error(text || "请求失败，请稍后重试。");
+    if (response.status === 401) clearAuthSession();
+    throw new ApiError(text || "请求失败，请稍后重试。", response.status);
   }
 
   return response.json() as Promise<T>;
@@ -169,10 +257,12 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   if (!response.ok) {
     const payload = await response.clone().json().catch(() => null);
     if (payload?.detail) {
-      throw new Error(Array.isArray(payload.detail) ? payload.detail.map((item: { msg?: string }) => item.msg ?? "Request error").join(", ") : payload.detail);
+      if (response.status === 401) clearAuthSession();
+      throw new ApiError(Array.isArray(payload.detail) ? payload.detail.map((item: { msg?: string }) => item.msg ?? "Request error").join(", ") : payload.detail, response.status);
     }
     const text = await response.text().catch(() => "");
-    throw new Error(text || "Request failed, please try again later.");
+    if (response.status === 401) clearAuthSession();
+    throw new ApiError(text || "Request failed, please try again later.", response.status);
   }
 
   return response.blob();
@@ -215,11 +305,153 @@ export function getAccountProfile() {
   return request<AccountProfile>("/api/account/profile");
 }
 
+export function changePassword(payload: { current_password: string; new_password: string }) {
+  return request<AuthResponse>("/api/account/password", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
 export function sendChat(message: string, sessionId?: number | null, provider: Provider = "openai", model?: string) {
   return request<{ text: string; session_id: number }>("/api/chat", {
     method: "POST",
     body: JSON.stringify({ message, session_id: sessionId ?? null, provider, model: model || null })
   });
+}
+
+export async function streamChat({
+  message,
+  sessionId,
+  provider = "openai",
+  model,
+  signal,
+  onSessionId,
+  onMeta,
+  onDelta,
+  onDone
+}: ChatStreamOptions): Promise<ChatStreamDone> {
+  const token = getAuthToken();
+  const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify({ message, session_id: sessionId ?? null, provider, model: model || null }),
+    cache: "no-store",
+    signal
+  });
+
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null);
+    const detail = payload?.detail;
+    const messageText = detail
+      ? Array.isArray(detail)
+        ? detail.map((item: { msg?: string }) => item.msg ?? "请求参数错误").join("；")
+        : String(detail)
+      : await response.text().catch(() => "");
+    if (response.status === 401) clearAuthSession();
+    throw new ApiError(messageText || "无法建立流式连接，请稍后重试。", response.status);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new ApiError("浏览器未能建立流式连接。", 502);
+
+  let announcedSessionId: number | null = null;
+  const announceSession = (value: unknown) => {
+    const nextSessionId = Number(value);
+    if (!Number.isSafeInteger(nextSessionId) || nextSessionId <= 0 || nextSessionId === announcedSessionId) return;
+    announcedSessionId = nextSessionId;
+    onSessionId?.(nextSessionId);
+  };
+  announceSession(response.headers.get("X-Session-Id"));
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed: ChatStreamDone | null = null;
+
+  const processEvent = (block: string) => {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+    }
+    if (dataLines.length === 0) return;
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    } catch {
+      throw new ApiError("收到无法解析的流式响应。", 502);
+    }
+
+    if (eventName === "meta") {
+      const meta: ChatStreamMeta = {
+        session_id: Number(payload.session_id),
+        provider: payload.provider === "grok" ? "grok" : "openai",
+        model: String(payload.model ?? "")
+      };
+      announceSession(meta.session_id);
+      onMeta?.(meta);
+      return;
+    }
+
+    if (eventName === "delta") {
+      if (typeof payload.text === "string" && payload.text) onDelta?.(payload.text);
+      return;
+    }
+
+    if (eventName === "done") {
+      const rawUsage = (payload.usage ?? {}) as Partial<ChatStreamUsage>;
+      completed = {
+        session_id: Number(payload.session_id),
+        message_id: Number(payload.message_id),
+        model: String(payload.model ?? ""),
+        usage: {
+          prompt_tokens: Number(rawUsage.prompt_tokens ?? 0),
+          completion_tokens: Number(rawUsage.completion_tokens ?? 0),
+          total_tokens: Number(rawUsage.total_tokens ?? 0)
+        }
+      };
+      announceSession(completed.session_id);
+      onDone?.(completed);
+      return;
+    }
+
+    if (eventName === "error") {
+      throw new ApiError(String(payload.message || "AI 回复失败，请稍后重试。"), 502);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replace(/\r\n/g, "\n");
+
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (block.trim()) processEvent(block);
+        boundary = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) processEvent(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!completed) throw new ApiError("流式连接提前结束，请重试。", 502);
+  return completed;
 }
 
 export function createChatJob(message: string, sessionId?: number | null, files?: File[], provider: Provider = "openai", model?: string) {
@@ -255,8 +487,22 @@ export function getChatModels() {
   return request<ChatModel[]>("/api/chat/models");
 }
 
+export function compareArena(prompt: string, contestants: ArenaContestant[]) {
+  return request<{ results: ArenaResult[] }>("/api/arena/compare", {
+    method: "POST",
+    body: JSON.stringify({ prompt, contestants })
+  });
+}
+
 export function getChatSession(sessionId: number) {
   return request<{ session: ChatSession; messages: ChatMessage[] }>(`/api/chat/sessions/${sessionId}`);
+}
+
+export function updateChatSession(sessionId: number, title: string) {
+  return request<ChatSession>(`/api/chat/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title })
+  });
 }
 
 export function deleteChatSession(sessionId: number) {
@@ -313,4 +559,12 @@ export function getHistory() {
 
 export function getRecentImages() {
   return request<ImageRecord[]>("/api/images");
+}
+
+export function deleteImage(recordId: number) {
+  return request<{ status: string }>(`/api/images/${recordId}`, { method: "DELETE" });
+}
+
+export function getHealth() {
+  return request<HealthStatus>("/api/health");
 }
