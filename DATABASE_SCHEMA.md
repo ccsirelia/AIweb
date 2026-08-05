@@ -161,7 +161,8 @@ cd backend
 | style | VARCHAR(40) | NOT NULL | 风格 |
 | size | VARCHAR(40) | NOT NULL | 解析后尺寸，如 `1024x1024` 或 `16:9 1k` |
 | aspect_ratio | VARCHAR(20) | NOT NULL | 画幅 |
-| quality | VARCHAR(20) | NOT NULL | 清晰度 |
+| quality | VARCHAR(20) | NOT NULL | 分辨率档位，OpenAI 为 `1k` / `2k` / `4k` / `custom`，Grok 为 `1k` / `2k` |
+| openai_quality | VARCHAR(20) | NOT NULL, 默认 auto | OpenAI 原生质量参数：`auto` / `low` / `medium` / `high` |
 | provider | VARCHAR(40) | NOT NULL, INDEX | openai / grok |
 | mode | VARCHAR(30) | NOT NULL, INDEX | `text_to_image` / `image_to_image` |
 | status | VARCHAR(20) | NOT NULL, INDEX | pending / running / completed / failed |

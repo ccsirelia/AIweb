@@ -110,6 +110,7 @@ class ImageJob(Base):
     size: Mapped[str] = mapped_column(String(40), nullable=False)
     aspect_ratio: Mapped[str] = mapped_column(String(20), nullable=False, default="1:1")
     quality: Mapped[str] = mapped_column(String(20), nullable=False, default="1k")
+    openai_quality: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
     provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
     mode: Mapped[str] = mapped_column(String(30), nullable=False, default="text_to_image", index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)

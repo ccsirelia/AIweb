@@ -29,6 +29,12 @@ const styles = ["写实", "动漫", "3D", "油画", "产品图", "摄影"];
 const aspectRatios = ["16:9", "1:1", "9:16"] as const;
 const openaiQualities = ["1k", "2k", "4k"] as const;
 const grokQualities = ["1k", "2k"] as const;
+const openaiGenerationQualities = [
+  { label: "Auto", value: "auto" },
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" }
+] as const;
 const providers: { label: string; value: Provider }[] = [
   { label: "OpenAI", value: "openai" },
   { label: "Grok", value: "grok" }
@@ -41,6 +47,7 @@ const presetSizes = {
 
 type AspectRatio = keyof typeof presetSizes;
 type Quality = keyof (typeof presetSizes)["1:1"];
+type OpenAIGenerationQuality = (typeof openaiGenerationQualities)[number]["value"];
 type ImageMode = "text_to_image" | "image_to_image";
 type ReferenceImage = { id: string; file: File; preview: string };
 
@@ -132,6 +139,7 @@ export function ImageStudio() {
   const [provider, setProvider] = useState<Provider>("openai");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("1:1");
   const [quality, setQuality] = useState<Quality>("1k");
+  const [openaiGenerationQuality, setOpenaiGenerationQuality] = useState<OpenAIGenerationQuality>("auto");
   const [customSizeEnabled, setCustomSizeEnabled] = useState(false);
   const [customWidth, setCustomWidth] = useState(1024);
   const [customHeight, setCustomHeight] = useState(1024);
@@ -421,6 +429,7 @@ export function ImageStudio() {
         size: isGrok ? presetSizes[aspectRatio][nextQuality] : size,
         aspect_ratio: isGrok ? aspectRatio : customSizeEnabled ? "custom" : aspectRatio,
         quality: isGrok ? nextQuality : customSizeEnabled ? "custom" : quality,
+        openai_quality: isGrok ? "auto" : openaiGenerationQuality,
         provider,
         mode,
         reference_images: mode === "image_to_image" ? referenceImages.map((item) => item.file) : undefined
@@ -682,6 +691,27 @@ export function ImageStudio() {
                 {isGrok ? "Grok 生图仅支持 1k / 2k，并使用所选画幅。" : `当前分辨率：${size}`}
               </p>
             </div>
+
+            {!isGrok && (
+              <div>
+                <label className="text-sm font-medium">生成质量</label>
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
+                  {openaiGenerationQualities.map((item) => (
+                    <button
+                      key={item.value}
+                      onClick={() => setOpenaiGenerationQuality(item.value)}
+                      className={cn(
+                        "h-9 rounded-xl border text-sm transition",
+                        openaiGenerationQuality === item.value ? "border-[#2DD4BF] bg-[#2DD4BF] text-slate-950" : "border-border bg-background/70 hover:border-[#2DD4BF]/50"
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">OpenAI 原生 quality 参数：{openaiGenerationQuality}</p>
+              </div>
+            )}
 
             {!isGrok && customSizeEnabled && (
               <div className="grid grid-cols-2 gap-3">

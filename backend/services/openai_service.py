@@ -657,6 +657,7 @@ class OpenAIService:
                         image=image_files,
                         prompt=final_prompt,
                         size=self._openai_generation_size(payload.size),
+                        quality=payload.openai_quality,
                         input_fidelity="high",
                         n=1,
                     )
@@ -676,6 +677,7 @@ class OpenAIService:
                     model=self.image_model,
                     prompt=final_prompt,
                     size=api_size,
+                    quality=payload.openai_quality,
                     n=1,
                 )
 

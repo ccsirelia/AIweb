@@ -8,6 +8,7 @@ Provider = Literal["openai", "grok"]
 ImageStyle = Literal["\u5199\u5b9e", "\u52a8\u6f2b", "3D", "\u6cb9\u753b", "\u4ea7\u54c1\u56fe", "\u6444\u5f71"]
 ImageAspectRatio = Literal["16:9", "1:1", "9:16", "custom"]
 ImageQuality = Literal["1k", "2k", "4k", "custom"]
+OpenAIImageQuality = Literal["auto", "low", "medium", "high"]
 
 
 def _normalize_provider_value(value: object) -> str:
@@ -110,6 +111,7 @@ class ImageRequest(BaseModel):
     size: str = Field("1024x1024", min_length=7, max_length=20, pattern=r"^\d{2,5}x\d{2,5}$")
     aspect_ratio: ImageAspectRatio = "1:1"
     quality: ImageQuality = "1k"
+    openai_quality: OpenAIImageQuality = "auto"
     provider: Provider = "openai"
 
     @field_validator("provider", mode="before")
@@ -130,6 +132,7 @@ class ImageJobOut(BaseModel):
     style: str
     size: str
     provider: str
+    openai_quality: str = "auto"
     mode: str = "text_to_image"
     reference_count: int = 0
     image_record_id: int | None = None

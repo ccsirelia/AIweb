@@ -55,6 +55,7 @@ def run_image_job(job_id: int) -> None:
             size=job.size if "x" in job.size else "1024x1024",
             aspect_ratio=job.aspect_ratio,  # type: ignore[arg-type]
             quality=job.quality,  # type: ignore[arg-type]
+            openai_quality=job.openai_quality,  # type: ignore[arg-type]
             provider=provider,  # type: ignore[arg-type]
         )
         if provider == "openai":

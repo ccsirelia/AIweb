@@ -84,6 +84,8 @@ def migrate_sqlite_schema() -> None:
         if "mode" not in image_job_columns:
             _run_sql("ALTER TABLE image_jobs ADD COLUMN mode VARCHAR(30) NOT NULL DEFAULT 'text_to_image'")
             _run_sql("CREATE INDEX IF NOT EXISTS ix_image_jobs_mode ON image_jobs (mode)")
+        if "openai_quality" not in image_job_columns:
+            _run_sql("ALTER TABLE image_jobs ADD COLUMN openai_quality VARCHAR(20) NOT NULL DEFAULT 'auto'")
 
     if _table_exists("chat_jobs"):
         job_columns = _columns("chat_jobs")

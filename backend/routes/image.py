@@ -88,6 +88,7 @@ def image_job_to_out(job: ImageJob, db: Session) -> ImageJobOut:
         style=job.style,
         size=job.size,
         provider=job.provider,
+        openai_quality=job.openai_quality,
         mode=job.mode,
         reference_count=db.query(func.count(ImageJobReference.id)).filter(ImageJobReference.job_id == job.id).scalar() or 0,
         image_record_id=job.image_record_id,
@@ -160,6 +161,7 @@ async def parse_image_job_request(request: Request) -> tuple[ImageRequest, str, 
             "size": str(form.get("size") or "1024x1024"),
             "aspect_ratio": str(form.get("aspect_ratio") or "1:1"),
             "quality": str(form.get("quality") or "1k"),
+            "openai_quality": str(form.get("openai_quality") or "auto"),
             "provider": str(form.get("provider") or "openai"),
         }
     )
@@ -220,6 +222,7 @@ async def create_image_job(
         size=resolved_size,
         aspect_ratio=payload.aspect_ratio,
         quality=payload.quality,
+        openai_quality=payload.openai_quality,
         provider=provider,
         mode=mode,
         status="pending",

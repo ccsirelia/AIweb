@@ -83,6 +83,7 @@ export type ImageJob = {
   style: string;
   size: string;
   provider: Provider;
+  openai_quality: string;
   mode: "text_to_image" | "image_to_image";
   reference_count: number;
   image_record_id: number | null;
@@ -511,7 +512,7 @@ export function deleteChatSession(sessionId: number) {
   });
 }
 
-export function generateImage(payload: { prompt: string; style: string; size: string; aspect_ratio?: string; quality?: string; provider?: Provider }) {
+export function generateImage(payload: { prompt: string; style: string; size: string; aspect_ratio?: string; quality?: string; openai_quality?: string; provider?: Provider }) {
   return request<{ image_base64: string }>("/api/image", {
     method: "POST",
     body: JSON.stringify(payload)
@@ -524,6 +525,7 @@ export function createImageJob(payload: {
   size: string;
   aspect_ratio?: string;
   quality?: string;
+  openai_quality?: string;
   provider?: Provider;
   mode?: "text_to_image" | "image_to_image";
   reference_images?: File[];
@@ -535,6 +537,7 @@ export function createImageJob(payload: {
     form.append("size", payload.size);
     form.append("aspect_ratio", payload.aspect_ratio ?? "1:1");
     form.append("quality", payload.quality ?? "1k");
+    form.append("openai_quality", payload.openai_quality ?? "auto");
     form.append("provider", payload.provider ?? "openai");
     form.append("mode", payload.mode ?? "image_to_image");
     payload.reference_images.forEach((file) => form.append("reference_images", file, file.name));
