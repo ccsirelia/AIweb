@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from database.models import ImageRecord, UserAccount
 from database.session import get_db
@@ -21,6 +21,17 @@ def account_profile(
     recent_images = (
         db.query(ImageRecord)
         .filter(ImageRecord.user_id == user.id)
+        .options(
+            load_only(
+                ImageRecord.id,
+                ImageRecord.prompt,
+                ImageRecord.style,
+                ImageRecord.size,
+                ImageRecord.mode,
+                ImageRecord.reference_count,
+                ImageRecord.created_at,
+            )
+        )
         .order_by(desc(ImageRecord.created_at))
         .limit(3)
         .all()

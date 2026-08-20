@@ -1,6 +1,8 @@
 # AIWeb Studio
 
-AIWeb Studio 是一个前后端分离的 AI 创作网站，包含用户注册登录、GPT 对话、AI 生图、图生图、历史记录、账号信息、后台管理和 SQLite 存储。
+AIWeb Studio 是一个前后端分离的 AI 创作网站，包含用户注册登录、GPT 对话、AI 生图、图生图、PPT 生成、工作流编排、历史记录、账号信息、后台管理和 SQLite 存储。
+
+PPT 工坊可根据提示词和上传资料生成可编辑的 PPTX，支持多种叙事模式、国企汇报等视觉风格、可编辑图表和多版式轮换。上传现有 PPTX 作为模板时，系统会分析并复用其原生页面、母版、配色、页眉、表格及内容槽位；模板无法安全解析或填充时会明确报错，不会静默退回到无关样式。
 
 ## 统一端口
 
@@ -14,6 +16,7 @@ AIWeb Studio 是一个前后端分离的 AI 创作网站，包含用户注册登
 本地访问地址：
 
 - 前端页面：http://localhost:3000
+- PPT 工坊：http://localhost:3000/presentations
 - 后端健康检查：http://localhost:8008/api/health
 - 后端管理后台：http://localhost:8008/admin
 - 管理员登录页：http://localhost:8008/admin/login
@@ -79,8 +82,12 @@ ADMIN_COOKIE_SECURE=false
 
 JOB_WORKER_CONCURRENCY=2
 JOB_TIMEOUT_SECONDS=300
+WORKFLOW_TIMEOUT_SECONDS=900
+PRESENTATION_TIMEOUT_SECONDS=900
 JOB_POLL_INTERVAL_SECONDS=0.5
 ```
+
+`PRESENTATION_TIMEOUT_SECONDS` 建议保留在 900 秒或更高。包含大体积参考 PPT、较多页面或图表分析的任务通常比聊天和生图耗时更长。
 
 服务器部署时，把 `FRONTEND_ORIGIN` 改成真实前端域名，例如：
 
@@ -214,6 +221,17 @@ npm.cmd run dev
 ```
 
 `frontend/package.json` 已固定 `dev` 和 `start` 使用 `3000` 端口。
+
+## PPT 工坊
+
+登录后打开 `http://localhost:3000/presentations`：
+
+1. 填写标题、受众、目的和内容要求，选择叙事模式、风格及页数。
+2. 可上传 PDF、Word、Excel、PPT、文本或图片作为内容依据；单个参考资料不超过 25MB。
+3. 可额外上传一个不超过 100MB 的 PPTX 模板。系统默认启用原生模板保真，并按页面语义选择、复用和填充模板中的版式。
+4. 生成任务在后端队列中执行，完成后下载可继续用 PowerPoint 或 WPS 编辑的 PPTX。
+
+单次任务最多上传 8 个文件，总大小不超过 125MB。涉及数字、比例和趋势的页面只使用资料中可核验的数据生成图表；缺少可靠数据时不会编造数值。
 
 ## 服务器迁移建议
 

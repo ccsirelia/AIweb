@@ -204,6 +204,64 @@ Token 用量统计表。聊天与生图成功后写入。
 | total_tokens | INTEGER | NOT NULL, INDEX | 合计 |
 | created_at | DATETIME | INDEX | 创建时间，UTC |
 
+## 4h. presentation_jobs
+
+PPT 生成任务表。保存内容简报、视觉与叙事配置、队列进度及最终 PPTX 路径。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 任务 ID |
+| user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
+| title | VARCHAR(180) | NOT NULL | 演示标题 |
+| brief | TEXT | NOT NULL | 生成要求与内容简报 |
+| audience | VARCHAR(180) | NOT NULL | 目标受众 |
+| purpose | VARCHAR(180) | NOT NULL | 演示目的 |
+| slide_count | INTEGER | NOT NULL | 目标页数，当前支持 5 至 100 页 |
+| language | VARCHAR(24) | NOT NULL | 输出语言，如 `zh-CN` |
+| style | VARCHAR(60) | NOT NULL | 视觉风格，如 `state-briefing`、`editorial` |
+| aspect_ratio | VARCHAR(12) | NOT NULL | `16:9` 或 `4:3` |
+| include_images | BOOLEAN | NOT NULL | 是否为关键页面安排视觉素材位 |
+| provider | VARCHAR(40) | NOT NULL, INDEX | openai / grok |
+| model | VARCHAR(160) | NOT NULL | 入队时固化的文字模型 ID |
+| workflow_id | VARCHAR(120) | NOT NULL | 所选 PPT 工作流标识 |
+| status | VARCHAR(24) | NOT NULL, INDEX | pending / running / completed / failed |
+| stage | VARCHAR(40) | NOT NULL | 当前生成阶段 |
+| progress | INTEGER | NOT NULL | 0 至 100 的进度值 |
+| metadata_json | TEXT | NOT NULL | 模式、增强功能和内部生成元数据 |
+| output_path | TEXT | NOT NULL | 生成文件的服务端路径 |
+| output_filename | VARCHAR(255) | NOT NULL | 下载文件名 |
+| error | TEXT | NOT NULL | 失败时的友好错误文案 |
+| created_at | DATETIME | INDEX | 入队时间，UTC |
+| started_at | DATETIME | NULL | 开始执行时间 |
+| completed_at | DATETIME | NULL | 结束时间 |
+
+## 4i. presentation_job_assets
+
+PPT 任务素材表。保存参考资料和原生 PPTX 模板的文件元数据及抽取文本。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | INTEGER | PRIMARY KEY, INDEX | 素材 ID |
+| job_id | INTEGER | FOREIGN KEY, INDEX | 所属 PPT 任务，删除任务时级联删除 |
+| user_id | INTEGER | FOREIGN KEY, INDEX | 所属用户 |
+| role | VARCHAR(24) | NOT NULL, INDEX | `reference` 或 `template` |
+| filename | VARCHAR(255) | NOT NULL | 清洗后的原始文件名 |
+| content_type | VARCHAR(120) | NOT NULL | MIME 类型 |
+| file_path | TEXT | NOT NULL | 服务端文件路径 |
+| file_size | INTEGER | NOT NULL | 文件字节数 |
+| text_content | TEXT | NULL | 从可解析资料中抽取的文本 |
+| created_at | DATETIME | INDEX | 上传时间，UTC |
+
+## 4j. workflow_runs / workflow_run_nodes / workflow_schedules
+
+工作流运行、节点明细和定时配置表。`workflow_runs` 保存一次完整执行的输入、模式、审批与质量状态；`workflow_run_nodes` 保存每个节点的输入输出、耗时和 token 用量；`workflow_schedules` 保存一次性或重复调度及最近执行关联。
+
+关键关联：
+
+- `workflow_run_nodes.run_id` 关联 `workflow_runs.id`，并对 `(run_id, node_key)` 设置唯一约束。
+- `workflow_schedules.last_run_id` 关联最近一次 `workflow_runs.id`，运行记录删除时置空。
+- 三张表均按 `user_id` 隔离用户数据；运行记录和节点状态可用于中断恢复、审批及质量门禁。
+
 ## 5. app_settings
 
 应用配置表。用于后端管理控制台保存 OpenAI 兼容 API 配置。
@@ -277,6 +335,11 @@ chat_sessions
 image_jobs
 image_job_references
 image_records
+presentation_job_assets
+presentation_jobs
 token_usage_records
 user_accounts
+workflow_run_nodes
+workflow_runs
+workflow_schedules
 ```

@@ -13,10 +13,11 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from database.models import ChatJob, ImageJob, WorkflowRun, WorkflowRunNode, WorkflowSchedule, now_utc
+from database.models import ChatJob, ImageJob, PresentationJob, WorkflowRun, WorkflowRunNode, WorkflowSchedule, now_utc
 from database.session import SessionLocal
 from services.chat_job_service import run_chat_job
 from services.image_job_service import run_image_job
+from services.presentation_service import generate_presentation
 from services.workflow_runtime_service import create_run_from_schedule, run_workflow_run
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class JobWorker:
         self.concurrency = _env_int("JOB_WORKER_CONCURRENCY", 2)
         self.timeout_seconds = _env_int("JOB_TIMEOUT_SECONDS", 300)
         self.workflow_timeout_seconds = _env_int("WORKFLOW_TIMEOUT_SECONDS", 900)
+        self.presentation_timeout_seconds = _env_int("PRESENTATION_TIMEOUT_SECONDS", 900)
         self.poll_interval = _env_float("JOB_POLL_INTERVAL_SECONDS", 0.5)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -109,6 +111,13 @@ class JobWorker:
                 job.error = "服务重启导致任务中断，请重新生成。"
                 job.completed_at = now_utc()
 
+            stale_presentations = db.query(PresentationJob).filter(PresentationJob.status == "running").all()
+            for job in stale_presentations:
+                job.status = "failed"
+                job.stage = "failed"
+                job.error = "服务重启导致 PPT 任务中断，请重新生成。"
+                job.completed_at = now_utc()
+
             stale_workflows = db.query(WorkflowRun).filter(WorkflowRun.status == "running").all()
             for run in stale_workflows:
                 run.status = "pending"
@@ -125,12 +134,13 @@ class JobWorker:
                     node.started_at = None
                     node.completed_at = None
 
-            if stale_chat or stale_image or stale_workflows:
+            if stale_chat or stale_image or stale_presentations or stale_workflows:
                 db.commit()
                 logger.warning(
-                    "Recovered stale running jobs after restart: chat=%s image=%s workflow=%s",
+                    "Recovered stale running jobs after restart: chat=%s image=%s presentation=%s workflow=%s",
                     len(stale_chat),
                     len(stale_image),
+                    len(stale_presentations),
                     len(stale_workflows),
                 )
         except Exception:
@@ -209,6 +219,26 @@ class JobWorker:
                     node.error = run.error
                     node.completed_at = now_utc()
                 changed = True
+            presentation_cutoff = now_utc() - timedelta(seconds=self.presentation_timeout_seconds)
+            presentations = (
+                db.query(PresentationJob)
+                .filter(PresentationJob.status == "running")
+                .filter(PresentationJob.started_at.isnot(None))
+                .filter(PresentationJob.started_at < presentation_cutoff)
+                .all()
+            )
+            for job in presentations:
+                key = ("presentation", job.id)
+                with self._lock:
+                    future = self._inflight.get(key)
+                    still_running = future is not None and not future.done()
+                if still_running:
+                    continue
+                job.status = "failed"
+                job.stage = "failed"
+                job.error = "PPT 生成超时，请重试。"
+                job.completed_at = now_utc()
+                changed = True
             if changed:
                 db.commit()
         except Exception:
@@ -264,6 +294,7 @@ class JobWorker:
             runners = {
                 "chat": run_chat_job,
                 "image": run_image_job,
+                "presentation": generate_presentation,
                 "workflow": run_workflow_run,
             }
             runner = runners[kind]
@@ -276,7 +307,7 @@ class JobWorker:
         db = SessionLocal()
         try:
             with self._lock:
-                active_ids: dict[str, list[int]] = {"chat": [], "image": [], "workflow": []}
+                active_ids: dict[str, list[int]] = {"chat": [], "image": [], "presentation": [], "workflow": []}
                 for (kind, job_id), future in self._inflight.items():
                     if not future.done():
                         active_ids[kind].append(job_id)
@@ -291,17 +322,22 @@ class JobWorker:
                 image_query = image_query.filter(ImageJob.id.notin_(active_ids["image"]))
             image = image_query.order_by(ImageJob.created_at.asc(), ImageJob.id.asc()).first()
 
+            presentation_query = db.query(PresentationJob).filter(PresentationJob.status == "pending")
+            if active_ids["presentation"]:
+                presentation_query = presentation_query.filter(PresentationJob.id.notin_(active_ids["presentation"]))
+            presentation = presentation_query.order_by(PresentationJob.created_at.asc(), PresentationJob.id.asc()).first()
+
             workflow_query = db.query(WorkflowRun).filter(WorkflowRun.status == "pending")
             if active_ids["workflow"]:
                 workflow_query = workflow_query.filter(WorkflowRun.id.notin_(active_ids["workflow"]))
             workflow = workflow_query.order_by(WorkflowRun.created_at.asc(), WorkflowRun.id.asc()).first()
 
-            candidates = [("chat", chat), ("image", image), ("workflow", workflow)]
+            candidates = [("chat", chat), ("image", image), ("presentation", presentation), ("workflow", workflow)]
             available = [(kind, job) for kind, job in candidates if job is not None]
             if not available:
                 return None
 
-            priority = {"chat": 0, "image": 1, "workflow": 2}
+            priority = {"chat": 0, "image": 1, "presentation": 2, "workflow": 3}
             kind, job = min(
                 available,
                 key=lambda item: (

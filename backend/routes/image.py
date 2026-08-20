@@ -1,18 +1,21 @@
+import base64
+import binascii
 import re
 import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import desc, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from starlette.datastructures import UploadFile
 
 from database.models import ImageJob, ImageJobReference, ImageRecord, UserAccount, WorkflowRun
 from database.session import get_db
-from models.schemas import ImageJobOut, ImageRecordOut, ImageRequest, ImageResponse
+from models.schemas import ImageJobOut, ImageRecordMetaOut, ImageRequest, ImageResponse
 from services.auth_service import current_user
 from services.image_job_service import public_image_error
 from services.openai_service import OpenAIService, OpenAIServiceError
@@ -99,9 +102,71 @@ def image_job_to_out(job: ImageJob, db: Session) -> ImageJobOut:
     )
 
 
-@router.get("/images", response_model=list[ImageRecordOut])
-def images(db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> list[ImageRecordOut]:
-    return db.query(ImageRecord).filter(ImageRecord.user_id == user.id).order_by(desc(ImageRecord.created_at)).limit(10).all()
+@router.get("/images", response_model=list[ImageRecordMetaOut])
+def images(db: Session = Depends(get_db), user: UserAccount = Depends(current_user)) -> list[ImageRecordMetaOut]:
+    return (
+        db.query(ImageRecord)
+        .filter(ImageRecord.user_id == user.id)
+        .options(
+            load_only(
+                ImageRecord.id,
+                ImageRecord.prompt,
+                ImageRecord.style,
+                ImageRecord.size,
+                ImageRecord.mode,
+                ImageRecord.reference_count,
+                ImageRecord.created_at,
+            )
+        )
+        .order_by(desc(ImageRecord.created_at))
+        .limit(10)
+        .all()
+    )
+
+
+def _image_media_type(raw: bytes) -> str:
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+@router.get("/images/{record_id}/content")
+def image_content(
+    record_id: int,
+    variant: str = Query("original", pattern="^(original|thumb)$"),
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+) -> Response:
+    record = db.get(ImageRecord, record_id)
+    if record is None or record.user_id != user.id:
+        raise HTTPException(status_code=404, detail="图片记录不存在。")
+    try:
+        raw = base64.b64decode(record.image_base64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(status_code=500, detail="图片数据已损坏。") from exc
+
+    media_type = _image_media_type(raw)
+    if variant == "thumb":
+        try:
+            with Image.open(BytesIO(raw)) as source:
+                source.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                output = BytesIO()
+                source.convert("RGB").save(output, format="WEBP", quality=78, method=4)
+                raw = output.getvalue()
+                media_type = "image/webp"
+        except (UnidentifiedImageError, OSError):
+            # Keep compatibility with older records that contain non-image test data.
+            pass
+
+    return Response(
+        content=raw,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.delete("/images/{record_id}")

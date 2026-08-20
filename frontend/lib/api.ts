@@ -39,7 +39,7 @@ export type ImageRecord = {
   size: string;
   mode: "text_to_image" | "image_to_image";
   reference_count: number;
-  image_base64: string;
+  image_base64?: string;
   created_at: string;
 };
 
@@ -91,6 +91,45 @@ export type ImageJob = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+};
+
+export type PresentationJob = {
+  id: number;
+  title: string;
+  brief: string;
+  audience: string;
+  purpose: string;
+  slide_count: number;
+  language: string;
+  style: string;
+  aspect_ratio: string;
+  include_images: boolean;
+  provider: Provider;
+  model: string;
+  workflow_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  stage: string;
+  progress: number;
+  asset_count: number;
+  output_filename: string;
+  download_available: boolean;
+  error: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type PresentationCatalogItem = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+export type PresentationCatalog = {
+  skill: { id: string; version: string; installed: boolean; source: string };
+  modes: PresentationCatalogItem[];
+  styles: PresentationCatalogItem[];
+  features: PresentationCatalogItem[];
 };
 
 export type User = {
@@ -176,6 +215,8 @@ export class ApiError extends Error {
 
 // Browser requests stay same-origin; Next.js resolves the private backend.
 const API_BASE_URL = "";
+const imageContentRequests = new Map<string, Promise<Blob>>();
+const imageBase64Requests = new Map<number, Promise<string>>();
 
 export function getAuthToken() {
   if (typeof window === "undefined") return "";
@@ -215,15 +256,27 @@ export function getStoredUser(): User | null {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken();
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {})
-    },
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(init?.headers ?? {})
+      },
+      cache: "no-store"
+    });
+  } catch {
+    // Browsers collapse proxy disconnects and CORS/network failures into the
+    // unhelpful `Failed to fetch` TypeError. Preserve a useful, localized
+    // message so large PPT uploads can be diagnosed without opening DevTools.
+    const isPresentationUpload = isFormData && path === "/api/presentations/jobs";
+    const message = isPresentationUpload
+      ? "PPT 上传连接中断，请检查网络或反向代理的上传大小限制后重试。"
+      : "无法连接到 AIWeb 服务，请检查网络后重试。";
+    throw new ApiError(message, 0);
+  }
 
   if (!response.ok) {
     const payload = await response.clone().json().catch(() => null);
@@ -556,12 +609,126 @@ export function getImageJob(jobId: number) {
   return request<ImageJob>(`/api/image/jobs/${jobId}`);
 }
 
-export function getHistory() {
-  return request<{ chats: ChatRecord[]; images: ImageRecord[] }>("/api/history");
+export function getPresentationJobs() {
+  return request<PresentationJob[]>("/api/presentations/jobs");
+}
+
+export function getPresentationCatalog() {
+  return request<PresentationCatalog>("/api/presentations/catalog");
+}
+
+export function getPresentationJob(jobId: number) {
+  return request<PresentationJob>(`/api/presentations/jobs/${jobId}`);
+}
+
+export function createPresentationJob(payload: {
+  title: string;
+  brief: string;
+  audience?: string;
+  purpose?: string;
+  slide_count?: number;
+  language?: string;
+  style?: string;
+  mode?: string;
+  features?: string[];
+  aspect_ratio?: string;
+  include_images?: boolean;
+  provider?: Provider;
+  model?: string;
+  workflow_id?: string;
+  references?: File[];
+  template?: File | null;
+}) {
+  const form = new FormData();
+  form.append("title", payload.title);
+  form.append("brief", payload.brief);
+  form.append("audience", payload.audience ?? "");
+  form.append("purpose", payload.purpose ?? "");
+  form.append("slide_count", String(payload.slide_count ?? 10));
+  form.append("language", payload.language ?? "zh-CN");
+  form.append("style", payload.style ?? "state-briefing");
+  form.append("mode", payload.mode ?? "pyramid");
+  form.append("features", (payload.features ?? []).join(","));
+  form.append("aspect_ratio", payload.aspect_ratio ?? "16:9");
+  form.append("include_images", String(payload.include_images ?? true));
+  form.append("provider", payload.provider ?? "openai");
+  if (payload.model) form.append("model", payload.model);
+  if (payload.workflow_id) form.append("workflow_id", payload.workflow_id);
+  payload.references?.forEach((file) => form.append("references", file, file.name));
+  if (payload.template) form.append("template", payload.template, payload.template.name);
+  return request<PresentationJob>("/api/presentations/jobs", { method: "POST", body: form });
+}
+
+export function retryPresentationJob(jobId: number) {
+  return request<PresentationJob>(`/api/presentations/jobs/${jobId}/retry`, { method: "POST" });
+}
+
+export function deletePresentationJob(jobId: number) {
+  return request<{ status: string }>(`/api/presentations/jobs/${jobId}`, { method: "DELETE" });
+}
+
+export async function downloadPresentation(job: PresentationJob) {
+  const blob = await requestBlob(`/api/presentations/jobs/${job.id}/download`);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = job.output_filename || `aiweb-presentation-${job.id}.pptx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export type HistoryPage = {
+  chats: ChatRecord[];
+  images: ImageRecord[];
+  chat_page: number;
+  image_page: number;
+  page_size: number;
+  chat_has_more: boolean;
+  image_has_more: boolean;
+};
+
+export function getHistory(options: { chatPage?: number; imagePage?: number; pageSize?: number } = {}) {
+  const params = new URLSearchParams({
+    chat_page: String(options.chatPage ?? 1),
+    image_page: String(options.imagePage ?? 1),
+    page_size: String(options.pageSize ?? 12)
+  });
+  return request<HistoryPage>(`/api/history?${params.toString()}`);
 }
 
 export function getRecentImages() {
   return request<ImageRecord[]>("/api/images");
+}
+
+export function getImageContent(recordId: number, variant: "original" | "thumb" = "original") {
+  const key = `${recordId}:${variant}`;
+  const existing = imageContentRequests.get(key);
+  if (existing) return existing;
+  const request = requestBlob(`/api/images/${recordId}/content?variant=${variant}`).finally(() => imageContentRequests.delete(key));
+  imageContentRequests.set(key, request);
+  return request;
+}
+
+export async function getImageDataUrl(recordId: number) {
+  const blob = await getImageContent(recordId, "original");
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error ?? new Error("图片读取失败。"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function getImageBase64(recordId: number) {
+  const existing = imageBase64Requests.get(recordId);
+  if (existing) return existing;
+  const request = getImageDataUrl(recordId)
+    .then((dataUrl) => dataUrl.split(",", 2)[1] ?? "")
+    .finally(() => imageBase64Requests.delete(recordId));
+  imageBase64Requests.set(recordId, request);
+  return request;
 }
 
 export function deleteImage(recordId: number) {

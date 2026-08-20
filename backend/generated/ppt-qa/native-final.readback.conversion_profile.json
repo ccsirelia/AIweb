@@ -1,0 +1,28 @@
+{
+  "schema": "ppt-master.source_to_md.profile.v1",
+  "converter": "ppt_to_md.py",
+  "conversion_type": "pptx",
+  "source": {
+    "path": "native-final.pptx",
+    "name": "native-final.pptx",
+    "suffix": ".pptx",
+    "kind": "file",
+    "exists": true,
+    "size_bytes": 21168344
+  },
+  "outputs": {
+    "markdown": "native-final.readback.md",
+    "asset_dir": "native-final.readback_files",
+    "image_manifest": "native-final.readback_files/image_manifest.json",
+    "image_count": 6
+  },
+  "markdown": {
+    "line_count": 230,
+    "char_count": 1931,
+    "heading_count": 13,
+    "table_count": 0,
+    "image_ref_count": 16,
+    "link_count": 0
+  },
+  "warnings": []
+}

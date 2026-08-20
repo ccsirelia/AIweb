@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, FolderKanban, Gauge, ImageIcon, LayoutDashboard, LogIn, LogOut, MessageSquareText, Settings, Sparkles, UserRound, Workflow } from "lucide-react";
+import { Archive, FileSliders, FolderKanban, Gauge, ImageIcon, LayoutDashboard, LogIn, LogOut, MessageSquareText, Settings, Sparkles, UserRound, Workflow } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { AUTH_CHANGED_EVENT, clearAuthSession, getHealth, getStoredUser, type User } from "@/lib/api";
@@ -12,6 +12,7 @@ const navItems = [
   { href: "/", label: "控制台", icon: LayoutDashboard, accent: "#5B7CFF" },
   { href: "/chat", label: "AI 对话", icon: MessageSquareText, accent: "#2DD4BF" },
   { href: "/image", label: "视觉工坊", icon: ImageIcon, accent: "#FB7185" },
+  { href: "/presentations", label: "PPT 工坊", icon: FileSliders, accent: "#2DD4BF" },
   { href: "/workflows", label: "工作流实验室", icon: Workflow, accent: "#A78BFA" },
   { href: "/runs", label: "执行控制台", icon: Gauge, accent: "#38BDF8" },
   { href: "/studio", label: "创作中枢", icon: FolderKanban, accent: "#34D399" },

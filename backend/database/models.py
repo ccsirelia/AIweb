@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.session import Base
@@ -18,6 +18,8 @@ class ChatRecord(Base):
     user_message: Mapped[str] = mapped_column(Text, nullable=False)
     ai_response: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+
+    __table_args__ = (Index("ix_chat_records_user_created_at", "user_id", "created_at"),)
 
 
 class ChatSession(Base):
@@ -99,6 +101,8 @@ class ImageRecord(Base):
     image_base64: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
 
+    __table_args__ = (Index("ix_image_records_user_created_at", "user_id", "created_at"),)
+
 
 class ImageJob(Base):
     __tablename__ = "image_jobs"
@@ -132,6 +136,52 @@ class ImageJobReference(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+
+
+class PresentationJob(Base):
+    __tablename__ = "presentation_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    brief: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str] = mapped_column(String(180), nullable=False, default="")
+    purpose: Mapped[str] = mapped_column(String(180), nullable=False, default="")
+    slide_count: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    language: Mapped[str] = mapped_column(String(24), nullable=False, default="zh-CN")
+    style: Mapped[str] = mapped_column(String(60), nullable=False, default="dark-tech")
+    aspect_ratio: Mapped[str] = mapped_column(String(12), nullable=False, default="16:9")
+    include_images: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai", index=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    workflow_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False, default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    output_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    output_filename: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_presentation_jobs_user_created_at", "user_id", "created_at"),)
+
+
+class PresentationJobAsset(Base):
+    __tablename__ = "presentation_job_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("presentation_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(24), nullable=False, default="reference", index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
 
 

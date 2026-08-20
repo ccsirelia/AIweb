@@ -14,6 +14,8 @@ from database.models import (
     ImageJob,
     ImageJobReference,
     ImageRecord,
+    PresentationJob,
+    PresentationJobAsset,
     TokenUsageRecord,
     UserAccount,
     WorkflowRun,
@@ -61,6 +63,7 @@ def migrate_sqlite_schema() -> None:
         if "user_id" not in chat_record_columns:
             _run_sql("ALTER TABLE chat_records ADD COLUMN user_id INTEGER")
             _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_records_user_id ON chat_records (user_id)")
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_chat_records_user_created_at ON chat_records (user_id, created_at)")
 
     if _table_exists("chat_sessions"):
         session_columns = _columns("chat_sessions")
@@ -78,6 +81,7 @@ def migrate_sqlite_schema() -> None:
             _run_sql("CREATE INDEX IF NOT EXISTS ix_image_records_mode ON image_records (mode)")
         if "reference_count" not in image_columns:
             _run_sql("ALTER TABLE image_records ADD COLUMN reference_count INTEGER NOT NULL DEFAULT 0")
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_image_records_user_created_at ON image_records (user_id, created_at)")
 
     if _table_exists("image_jobs"):
         image_job_columns = _columns("image_jobs")
@@ -123,6 +127,12 @@ def migrate_sqlite_schema() -> None:
             "WHERE target IS NULL OR target NOT IN ('chat', 'image')"
         )
         _run_sql("CREATE INDEX IF NOT EXISTS ix_workflow_schedules_target ON workflow_schedules (target)")
+
+    if _table_exists("presentation_jobs"):
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_presentation_jobs_user_created_at ON presentation_jobs (user_id, created_at)")
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_presentation_jobs_status ON presentation_jobs (status)")
+    if _table_exists("presentation_job_assets"):
+        _run_sql("CREATE INDEX IF NOT EXISTS ix_presentation_job_assets_job_id ON presentation_job_assets (job_id)")
 
     # Rename legacy provider misspelling gork → grok in job/usage tables.
     if _table_exists("chat_jobs"):

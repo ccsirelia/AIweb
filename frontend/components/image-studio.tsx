@@ -12,6 +12,8 @@ import {
   deleteImage,
   getAuthToken,
   getImageJob,
+  getImageBase64,
+  getImageContent,
   getRecentImages,
   getStoredUser,
   type ImageJob,
@@ -132,6 +134,28 @@ function createReferenceImageId(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}-${uniquePart}`;
 }
 
+function ImageStudioHistoryThumbnail({ record }: { record: ImageRecord }) {
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    getImageContent(record.id, "thumb")
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(objectUrl);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [record.id]);
+
+  return thumbnailUrl ? <img src={thumbnailUrl} alt={record.prompt} loading="lazy" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-[10px] text-muted-foreground">加载中</div>;
+}
+
 export function ImageStudio() {
   const [mode, setMode] = useState<ImageMode>("text_to_image");
   const [prompt, setPrompt] = useState("");
@@ -147,6 +171,7 @@ export function ImageStudio() {
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recentImages, setRecentImages] = useState<ImageRecord[]>([]);
+  const [selectedHistoryImageId, setSelectedHistoryImageId] = useState<number | null>(null);
   const [deletingImageId, setDeletingImageId] = useState<number | null>(null);
   const [pendingJobs, setPendingJobs] = useState<ImageJob[]>([]);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
@@ -156,6 +181,7 @@ export function ImageStudio() {
   const draftStorageKeyRef = useRef<string | null>(null);
   const [draggingReferences, setDraggingReferences] = useState(false);
   const router = useRouter();
+  const imageHistoryRequestRef = useRef<Promise<ImageRecord[]> | null>(null);
 
   const isGrok = provider === "grok";
   const maxReferenceImages = isGrok ? 3 : 6;
@@ -348,9 +374,12 @@ export function ImageStudio() {
       writePendingImageJobs(nextJobs);
       setPendingJobs(nextJobs);
       setLoading(nextJobs.length > 0);
-      if (completedImage) setImage(completedImage);
+      if (completedImage) {
+        setImage(completedImage);
+        setSelectedHistoryImageId(null);
+      }
       if (shouldRefresh) {
-        await refreshImages();
+        await refreshImages({ loadPreview: !completedImage });
         if (completedImage) toast.success("图片生成完成。");
       }
     } finally {
@@ -372,13 +401,19 @@ export function ImageStudio() {
     }
   }
 
-  async function refreshImages() {
+  async function refreshImages(options: { loadPreview?: boolean } = {}) {
     setHistoryLoading(true);
     try {
-      const records = await getRecentImages();
+      if (!imageHistoryRequestRef.current) {
+        imageHistoryRequestRef.current = getRecentImages().finally(() => {
+          imageHistoryRequestRef.current = null;
+        });
+      }
+      const records = await imageHistoryRequestRef.current;
       setRecentImages(records);
-      if (!image && records[0] && readPendingImageJobs().length === 0) {
-        setImage(records[0].image_base64);
+      if (options.loadPreview !== false && !image && records[0] && readPendingImageJobs().length === 0) {
+        setImage(await getImageBase64(records[0].id));
+        setSelectedHistoryImageId(records[0].id);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片历史加载失败。");
@@ -395,7 +430,10 @@ export function ImageStudio() {
       await deleteImage(record.id);
       const nextImages = recentImages.filter((item) => item.id !== record.id);
       setRecentImages(nextImages);
-      setImage((current) => (current === record.image_base64 ? nextImages[0]?.image_base64 ?? "" : current));
+      if (selectedHistoryImageId === record.id) {
+        setSelectedHistoryImageId(nextImages[0]?.id ?? null);
+        setImage(nextImages[0] ? await getImageBase64(nextImages[0].id) : "");
+      }
       toast.success("图片已删除。");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片删除失败。");
@@ -443,8 +481,14 @@ export function ImageStudio() {
     }
   }
 
-  function openHistoryImage(record: ImageRecord) {
-    setImage(record.image_base64);
+  async function openHistoryImage(record: ImageRecord) {
+    try {
+      setImage(await getImageBase64(record.id));
+      setSelectedHistoryImageId(record.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "图片加载失败。");
+      return;
+    }
     setPrompt(record.prompt);
     setStyle(styles.includes(record.style) ? record.style : "写实");
     setMode(record.mode ?? "text_to_image");
@@ -804,7 +848,7 @@ export function ImageStudio() {
               <h3 className="text-sm font-semibold">最近生成</h3>
               <p className="mt-1 text-xs text-muted-foreground">最近 10 张，可预览下载</p>
             </div>
-            <Button variant="secondary" size="icon" onClick={refreshImages} aria-label="刷新图片历史">
+            <Button variant="secondary" size="icon" onClick={() => void refreshImages()} aria-label="刷新图片历史">
               {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
             </Button>
           </div>
@@ -826,11 +870,11 @@ export function ImageStudio() {
             ) : (
               recentImages.map((record) => (
                 <div key={record.id} className="flex gap-3 rounded-2xl border border-border bg-background/70 p-2 transition hover:border-[#5B7CFF]/45">
-                  <button className="h-[4.5rem] w-[4.5rem] shrink-0 overflow-hidden rounded-xl bg-muted" onClick={() => openHistoryImage(record)}>
-                    <img src={`data:image/png;base64,${record.image_base64}`} alt={record.prompt} className="h-full w-full object-cover" />
+                  <button className="h-[4.5rem] w-[4.5rem] shrink-0 overflow-hidden rounded-xl bg-muted" onClick={() => void openHistoryImage(record)}>
+                    <ImageStudioHistoryThumbnail record={record} />
                   </button>
                   <div className="min-w-0 flex-1">
-                    <button className="line-clamp-2 text-left text-sm font-semibold" onClick={() => openHistoryImage(record)}>
+                    <button className="line-clamp-2 text-left text-sm font-semibold" onClick={() => void openHistoryImage(record)}>
                       {record.prompt}
                     </button>
                     <div className="mt-1 text-xs text-muted-foreground">
@@ -841,7 +885,14 @@ export function ImageStudio() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 shrink-0"
-                        onClick={() => downloadBase64(record.image_base64, `aiweb-image-${record.id}.png`)}
+                        onClick={() => void getImageContent(record.id).then((blob) => {
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.href = url;
+                          link.download = `aiweb-image-${record.id}.png`;
+                          link.click();
+                          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        }).catch((error) => toast.error(error instanceof Error ? error.message : "原图下载失败。"))}
                         aria-label="下载原图"
                         title="下载原图"
                       >

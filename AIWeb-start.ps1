@@ -1,6 +1,8 @@
 param(
   [int]$FrontendPort = 3000,
-  [int]$BackendPort = 8008
+  [int]$BackendPort = 8008,
+  [ValidateSet("production", "development")]
+  [string]$Mode = "production"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,9 +37,13 @@ if (Test-AIWebProcess $BackendPidFile "backend") {
   }
   $backendOut = Join-Path $LogDir "backend.out.log"
   $backendErr = Join-Path $LogDir "backend.err.log"
+  $backendArguments = @("-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$BackendPort")
+  if ($Mode -eq "development") {
+    $backendArguments = @("-m", "uvicorn", "main:app", "--reload", "--host", "0.0.0.0", "--port", "$BackendPort")
+  }
   $backend = Start-Process `
     -FilePath $python `
-    -ArgumentList @("-m", "uvicorn", "main:app", "--reload", "--host", "0.0.0.0", "--port", "$BackendPort") `
+    -ArgumentList $backendArguments `
     -WorkingDirectory $BackendDir `
     -RedirectStandardOutput $backendOut `
     -RedirectStandardError $backendErr `
@@ -58,11 +64,79 @@ if (Test-AIWebProcess $FrontendPidFile "frontend") {
   if (-not (Test-Path $nextBin)) {
     throw "Next.js runner not found: $nextBin. Please run npm install in frontend first."
   }
+  if ($Mode -eq "production") {
+    $buildMarker = Join-Path $FrontendDir ".next\BUILD_ID"
+    $buildFingerprintFile = Join-Path $RuntimeDir "frontend-production-build.fingerprint"
+    $nextEnvModule = Join-Path $FrontendDir "node_modules\@next\env"
+    if (-not (Test-Path $nextEnvModule)) {
+      throw "Next.js environment loader not found: $nextEnvModule. Please run npm install in frontend first."
+    }
+    $backendUrlResolver = @'
+const { loadEnvConfig } = require(process.argv[1]);
+loadEnvConfig(process.argv[2], false, { info() {}, error() {} });
+process.stdout.write(process.env.BACKEND_API_URL ?? "http://localhost:8008");
+'@
+    $effectiveBackendApiUrl = "$(& $node -e $backendUrlResolver $nextEnvModule $FrontendDir)"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to resolve the frontend BACKEND_API_URL."
+    }
+    $fingerprintPayload = "BACKEND_API_URL`0$effectiveBackendApiUrl"
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $fingerprintBytes = [System.Text.Encoding]::UTF8.GetBytes($fingerprintPayload)
+      $fingerprintHash = $sha256.ComputeHash($fingerprintBytes)
+    } finally {
+      $sha256.Dispose()
+    }
+    $currentBuildFingerprint = "backend-api-url-v1:" + ([System.BitConverter]::ToString($fingerprintHash)).Replace("-", "").ToLowerInvariant()
+    $storedBuildFingerprint = if (Test-Path $buildFingerprintFile) {
+      (Get-Content -LiteralPath $buildFingerprintFile -Raw).Trim()
+    } else {
+      ""
+    }
+    $buildInputs = @(
+      (Join-Path $FrontendDir "next.config.ts"),
+      (Join-Path $FrontendDir "package.json"),
+      (Join-Path $FrontendDir "package-lock.json")
+    ) | Where-Object { Test-Path $_ }
+    foreach ($sourceDir in @("app", "components", "lib", "public")) {
+      $sourcePath = Join-Path $FrontendDir $sourceDir
+      if (Test-Path $sourcePath) {
+        $buildInputs += Get-ChildItem -LiteralPath $sourcePath -Recurse -File | Select-Object -ExpandProperty FullName
+      }
+    }
+    $needsBuild = (-not (Test-Path $buildMarker)) -or ($storedBuildFingerprint -ne $currentBuildFingerprint)
+    if (-not $needsBuild) {
+      $buildTime = (Get-Item $buildMarker).LastWriteTimeUtc
+      $needsBuild = @($buildInputs | Where-Object { (Get-Item $_).LastWriteTimeUtc -gt $buildTime }).Count -gt 0
+    }
+    if ($needsBuild) {
+      Write-Host "AIWeb frontend build is missing or stale; building production bundle..."
+      # Next resolves the app directory relative to the current working
+      # directory. The launcher itself may be invoked from the repository root,
+      # so build explicitly inside frontend instead of relying on the caller's
+      # location.
+      Push-Location $FrontendDir
+      try {
+        & $node $nextBin build
+      } finally {
+        Pop-Location
+      }
+      if ($LASTEXITCODE -ne 0) {
+        throw "Next.js production build failed."
+      }
+      Set-Content -LiteralPath $buildFingerprintFile -Value $currentBuildFingerprint -Encoding Ascii -NoNewline
+    }
+  }
+  $frontendArguments = @($nextBin, "start", "-p", "$FrontendPort")
+  if ($Mode -eq "development") {
+    $frontendArguments = @($nextBin, "dev", "-p", "$FrontendPort")
+  }
   $frontendOut = Join-Path $LogDir "frontend.out.log"
   $frontendErr = Join-Path $LogDir "frontend.err.log"
   $frontend = Start-Process `
     -FilePath $node `
-    -ArgumentList @($nextBin, "dev", "-p", "$FrontendPort") `
+    -ArgumentList $frontendArguments `
     -WorkingDirectory $FrontendDir `
     -RedirectStandardOutput $frontendOut `
     -RedirectStandardError $frontendErr `
@@ -76,4 +150,5 @@ Write-Host ""
 Write-Host "AIWeb is starting:"
 Write-Host "  Frontend: http://localhost:$FrontendPort"
 Write-Host "  Backend : http://localhost:$BackendPort"
+Write-Host "  Mode    : $Mode"
 Write-Host "  Logs    : $LogDir"

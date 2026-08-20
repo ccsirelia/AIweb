@@ -195,9 +195,56 @@ class ImageRecordOut(BaseModel):
         from_attributes = True
 
 
+class PresentationJobOut(BaseModel):
+    id: int
+    title: str
+    brief: str
+    audience: str
+    purpose: str
+    slide_count: int
+    language: str
+    style: str
+    aspect_ratio: str
+    include_images: bool
+    provider: str
+    model: str = ""
+    workflow_id: str
+    status: str
+    stage: str
+    progress: int
+    asset_count: int = 0
+    output_filename: str = ""
+    download_available: bool = False
+    error: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ImageRecordMetaOut(BaseModel):
+    id: int
+    prompt: str
+    style: str
+    size: str
+    mode: str = "text_to_image"
+    reference_count: int = 0
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class HistoryResponse(BaseModel):
     chats: list[ChatRecordOut]
-    images: list[ImageRecordOut]
+    images: list[ImageRecordMetaOut]
+    chat_page: int = 1
+    image_page: int = 1
+    page_size: int = 12
+    chat_has_more: bool = False
+    image_has_more: bool = False
 
 
 class TokenUsageSummary(BaseModel):
@@ -210,7 +257,7 @@ class AccountProfileResponse(BaseModel):
     user: UserOut
     created_at: datetime
     token_usage: TokenUsageSummary
-    recent_images: list[ImageRecordOut]
+    recent_images: list[ImageRecordMetaOut]
 
 
 WorkflowExecutionMode = Literal["sequential", "parallel"]

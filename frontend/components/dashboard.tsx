@@ -23,7 +23,7 @@ import { toast } from "sonner";
 
 import { PageShell } from "@/components/page-shell";
 import { Card } from "@/components/ui/card";
-import { getAccountProfile, getAuthToken, getHealth, getStoredUser, type AccountProfile } from "@/lib/api";
+import { getAccountProfile, getAuthToken, getHealth, getImageContent, getStoredUser, type AccountProfile } from "@/lib/api";
 import {
   WORKFLOW_LIBRARY_CHANGED_EVENT,
   WORKFLOW_USAGE_CHANGED_EVENT,
@@ -71,6 +71,7 @@ export function Dashboard() {
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [user, setUser] = useState<ReturnType<typeof getStoredUser>>(null);
+  const [recentImageUrl, setRecentImageUrl] = useState("");
   const [customWorkflows, setCustomWorkflows] = useState<WorkflowTemplate[]>([]);
   const [workflowUsage, setWorkflowUsage] = useState<WorkflowUsageState>({ favorites: [], recent: [], useCounts: {} });
 
@@ -79,6 +80,29 @@ export function Dashboard() {
     getHealth().then(() => setOnline(true)).catch(() => setOnline(false));
     if (getAuthToken()) getAccountProfile().then(setProfile).catch(() => setProfile(null));
   }, []);
+
+  const recentImageId = profile?.recent_images[0]?.id ?? null;
+  useEffect(() => {
+    if (!recentImageId) {
+      setRecentImageUrl("");
+      return;
+    }
+    let active = true;
+    let objectUrl = "";
+    getImageContent(recentImageId, "original")
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setRecentImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) setRecentImageUrl("");
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [recentImageId]);
 
   useEffect(() => {
     const refresh = () => {
@@ -145,8 +169,8 @@ export function Dashboard() {
         </div>
 
         <div className="relative min-h-[260px] overflow-hidden border-t border-border lg:border-l lg:border-t-0">
-          {recentImage ? (
-            <img src={`data:image/png;base64,${recentImage.image_base64}`} alt={recentImage.prompt} className="absolute inset-0 h-full w-full object-cover" />
+          {recentImage && recentImageUrl ? (
+            <img src={recentImageUrl} alt={recentImage.prompt} className="absolute inset-0 h-full w-full object-cover" />
           ) : (
             <Image src="/images/portrait-theme.png" alt="AI 视觉作品预览" fill priority sizes="(min-width: 1024px) 42vw, 100vw" className="object-cover object-[72%_center]" />
           )}

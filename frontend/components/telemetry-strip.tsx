@@ -28,6 +28,7 @@ const routeNames: Record<string, string> = {
   "/": "创作控制台",
   "/chat": "AI 对话",
   "/image": "视觉工坊",
+  "/presentations": "PPT 工坊",
   "/workflows": "工作流实验室",
   "/runs": "执行控制台",
   "/studio": "创作中枢",

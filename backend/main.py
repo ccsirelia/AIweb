@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from database.init_db import init_db
-from routes import account, admin, arena, auth, chat, history, image, template_hub, workflow_runtime
+from routes import account, admin, arena, auth, chat, history, image, presentations, template_hub, workflow_runtime
 from services.job_worker import job_worker
 
 logger = logging.getLogger("uvicorn.error")
@@ -89,6 +89,7 @@ app.include_router(auth.router)
 app.include_router(account.router)
 app.include_router(chat.router)
 app.include_router(image.router)
+app.include_router(presentations.router)
 app.include_router(history.router)
 app.include_router(arena.router)
 app.include_router(template_hub.router)

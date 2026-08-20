@@ -14,6 +14,7 @@ const pageMeta: Record<string, { eyebrow: string; title: string }> = {
   "/": { eyebrow: "WORKSPACE / OVERVIEW", title: "创作控制台" },
   "/chat": { eyebrow: "WORKSPACE / LANGUAGE", title: "AI 对话" },
   "/image": { eyebrow: "WORKSPACE / VISION", title: "视觉工坊" },
+  "/presentations": { eyebrow: "WORKSPACE / PRESENTATIONS", title: "PPT 工坊" },
   "/workflows": { eyebrow: "WORKSPACE / AUTOMATION", title: "工作流实验室" },
   "/runs": { eyebrow: "AUTOMATION / RUNTIME", title: "执行控制台" },
   "/studio": { eyebrow: "WORKSPACE / CREATIVE OS", title: "创作中枢" },

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarDays, Download, ImageIcon, KeyRound, Loader2, Mail, ShieldCheck, UserRound, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 
-import { changePassword, getAccountProfile, getAuthToken, setAuthSession, type AccountProfile, type ImageRecord } from "@/lib/api";
+import { changePassword, getAccountProfile, getAuthToken, getImageContent, setAuthSession, type AccountProfile, type ImageRecord } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,11 +14,40 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value || 0);
 }
 
-function downloadBase64Image(record: ImageRecord) {
+async function downloadImage(record: ImageRecord) {
+  const blob = await getImageContent(record.id);
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = `data:image/png;base64,${record.image_base64}`;
+  link.href = url;
   link.download = `aiweb-image-${record.id}.png`;
   link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function RecentImagePreview({ record }: { record: ImageRecord }) {
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    getImageContent(record.id, "thumb")
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(objectUrl);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [record.id]);
+
+  return thumbnailUrl ? (
+    <img src={thumbnailUrl} alt={record.prompt} loading="lazy" className="h-full w-full object-cover" />
+  ) : (
+    <div className="grid h-full place-items-center text-xs text-muted-foreground">缩略图加载中</div>
+  );
 }
 
 function StatCard({ label, value, desc }: { label: string; value: number; desc: string }) {
@@ -218,7 +247,7 @@ export function AccountProfilePage() {
               {profile.recent_images.map((record) => (
                 <div key={record.id} className="overflow-hidden rounded-2xl border border-border bg-background/70 transition hover:-translate-y-0.5 hover:border-[#5B7CFF]/50">
                   <div className="aspect-square bg-muted">
-                    <img src={`data:image/png;base64,${record.image_base64}`} alt={record.prompt} className="h-full w-full object-cover" />
+                    <RecentImagePreview record={record} />
                   </div>
                   <div className="space-y-3 p-3">
                     <div>
@@ -227,7 +256,7 @@ export function AccountProfilePage() {
                         {record.style} · {record.size} · {new Date(record.created_at).toLocaleDateString()}
                       </div>
                     </div>
-                    <Button variant="secondary" size="sm" className="w-full" onClick={() => downloadBase64Image(record)}>
+                    <Button variant="secondary" size="sm" className="w-full" onClick={() => void downloadImage(record).catch((error) => toast.error(error instanceof Error ? error.message : "原图下载失败。"))}>
                       <Download className="h-4 w-4" />
                       下载原图
                     </Button>

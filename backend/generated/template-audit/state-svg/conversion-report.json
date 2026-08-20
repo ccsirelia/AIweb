@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "source": "state-variants.pptx",
+  "mode": "tolerant",
+  "summary": {
+    "slides": 10,
+    "warnings": 0
+  },
+  "artifacts": {
+    "animationConfig": "animations.json",
+    "animationMedia": []
+  },
+  "diagnostics": []
+}
