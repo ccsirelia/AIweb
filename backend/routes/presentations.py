@@ -39,6 +39,9 @@ ALLOWED_TEMPLATE_EXTENSIONS = {".pptx"}
 ALLOWED_STYLES = {
     "random",
     "state-briefing",
+    "aviation-blue",
+    "aqua-planning",
+    "security-report",
     "dark-tech",
     "swiss-minimal",
     "glassmorphism",
@@ -78,6 +81,9 @@ SKILL_CATALOG = {
     "styles": [
         {"id": "random", "label": "智能随机", "description": "根据提示词、资料和模板自动选择最合适的视觉方向。"},
         {"id": "state-briefing", "label": "国企蓝白", "description": "白底、机场蓝、顶部章节条与克制的信息层级，适合正式汇报。"},
+        {"id": "aviation-blue", "label": "机场专项蓝", "description": "白底与机场蓝、编号章、图纸或现场照片证据，适合项目与外包专项汇报。"},
+        {"id": "aqua-planning", "label": "浅青年度规划", "description": "浅青底、轻量章节号与阶段控件，适合年度计划、部署和成果展望。"},
+        {"id": "security-report", "label": "安护年度深蓝", "description": "深蓝章节、浅色数据页与硬朗标签，适合安全、安保和年度总结。"},
         {"id": "dark-tech", "label": "暗夜科技", "description": "深色底、光感线条、几何节点。"},
         {"id": "swiss-minimal", "label": "瑞士极简", "description": "网格、留白与极少装饰。"},
         {"id": "glassmorphism", "label": "玻璃拟态", "description": "半透明面板、光晕与悬浮层次。"},
@@ -93,7 +99,7 @@ SKILL_CATALOG = {
         {"id": "assertion_titles", "label": "结论式标题", "description": "把页标题写成可直接汇报的判断。"},
         {"id": "kicker_summary", "label": "小标题 + 页面总结", "description": "每页增加眉题、结论带和一句话总结。"},
         {"id": "layout_variety", "label": "多版式轮换", "description": "在观点、对比、指标、流程、引文之间切换构图。"},
-        {"id": "visual_decor", "label": "视觉装饰体系", "description": "按风格生成规则线、节点、纸张标记或玻璃光晕。"},
+        {"id": "visual_decor", "label": "视觉装饰与控件", "description": "按页面角色生成规则线、编号章、章节条、证据标签与克制装饰。"},
         {"id": "metrics", "label": "关键指标页", "description": "把事实提炼成适合管理层快速扫描的数字。"},
         {"id": "roadmap", "label": "路线图页", "description": "自动生成阶段、负责人和下一步动作的时间轴。"},
         {"id": "comparison", "label": "对比决策页", "description": "把方案、现状或竞品放到同一判断框架。"},

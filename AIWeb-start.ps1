@@ -74,7 +74,7 @@ if (Test-AIWebProcess $FrontendPidFile "frontend") {
     $backendUrlResolver = @'
 const { loadEnvConfig } = require(process.argv[1]);
 loadEnvConfig(process.argv[2], false, { info() {}, error() {} });
-process.stdout.write(process.env.BACKEND_API_URL ?? "http://localhost:8008");
+process.stdout.write(process.env.BACKEND_API_URL ?? 'http://localhost:8008');
 '@
     $effectiveBackendApiUrl = "$(& $node -e $backendUrlResolver $nextEnvModule $FrontendDir)"
     if ($LASTEXITCODE -ne 0) {

@@ -67,6 +67,9 @@ const fallbackCatalog: PresentationCatalog = {
   styles: [
     { id: "random", label: "智能随机", description: "根据提示词、资料和模板自动选择最合适的视觉方向。" },
     { id: "state-briefing", label: "国企蓝白", description: "白底、机场蓝、顶部章节条与克制的信息层级，适合正式汇报。" },
+    { id: "aviation-blue", label: "机场专项蓝", description: "白底与机场蓝、编号章、图纸或现场照片证据，适合项目与外包专项汇报。" },
+    { id: "aqua-planning", label: "浅青年度规划", description: "浅青底、轻量章节号与阶段控件，适合年度计划、部署和成果展望。" },
+    { id: "security-report", label: "安护年度深蓝", description: "深蓝章节、浅色数据页与硬朗标签，适合安全、安保和年度总结。" },
     { id: "dark-tech", label: "暗夜科技", description: "深色底、光感线条、几何节点。" },
     { id: "swiss-minimal", label: "瑞士极简", description: "网格、留白与极少装饰。" },
     { id: "glassmorphism", label: "玻璃拟态", description: "半透明面板、光晕与悬浮层次。" },
@@ -82,7 +85,7 @@ const fallbackCatalog: PresentationCatalog = {
     { id: "assertion_titles", label: "结论式标题", description: "把页标题写成可直接汇报的判断。" },
     { id: "kicker_summary", label: "小标题 + 页面总结", description: "每页增加眉题、结论带和一句话总结。" },
     { id: "layout_variety", label: "多版式轮换", description: "在观点、对比、指标、流程、引文之间切换构图。" },
-    { id: "visual_decor", label: "视觉装饰体系", description: "按风格生成规则线、节点、纸张标记或玻璃光晕。" },
+    { id: "visual_decor", label: "视觉装饰与控件", description: "按页面角色生成规则线、编号章、章节条、证据标签与克制装饰。" },
     { id: "metrics", label: "关键指标页", description: "把事实提炼成适合管理层快速扫描的数字。" },
     { id: "roadmap", label: "路线图页", description: "自动生成阶段、负责人和下一步动作的时间轴。" },
     { id: "comparison", label: "对比决策页", description: "把方案、现状或竞品放到同一判断框架。" },
@@ -93,6 +96,9 @@ const fallbackCatalog: PresentationCatalog = {
 };
 
 const workflows = [
+  { id: "airport-outsourcing-report", title: "航站楼岗位外包", description: "范围、岗位、成本、市场与可行性", icon: BriefcaseBusiness, accent: "#005BAC", slides: 16, purpose: "向公司领导班子说明航站楼岗位外包边界、测算依据、市场证据与审议建议", mode: "pyramid" },
+  { id: "annual-work-plan", title: "年度工作规划", description: "主线、举措、里程碑与预期成果", icon: Presentation, accent: "#32B8C7", slides: 14, purpose: "对齐年度工作主线、重点任务、时间安排和可衡量成果", mode: "briefing" },
+  { id: "security-annual-review", title: "安护年度总结", description: "数据、举措、成效、问题与计划", icon: Target, accent: "#07569F", slides: 18, purpose: "向管理层复盘安检护卫年度成效、重点举措、存在问题和下一年度安排", mode: "briefing" },
   { id: "state-special-report", title: "专项工作汇报", description: "背景、进展、问题与请示事项", icon: BriefcaseBusiness, accent: "#00479D", slides: 12, purpose: "向公司领导班子汇报专项工作并推动关键事项决策", mode: "pyramid" },
   { id: "feasibility-study", title: "可研与立项", description: "必要性、方案、测算与风险", icon: FileArchive, accent: "#2B6F9F", slides: 16, purpose: "形成可供立项审议的必要性判断、方案比较和投资测算", mode: "briefing" },
   { id: "procurement-review", title: "采购评审", description: "需求、市场、控制价与建议", icon: Layers3, accent: "#397D75", slides: 14, purpose: "为采购或招标评审提供可追溯的需求依据、市场证据和决策建议", mode: "pyramid" },
@@ -110,6 +116,21 @@ const workflows = [
 ] as const;
 
 const workflowBriefs: Record<string, { audience: string; style?: string; brief: string }> = {
+  "airport-outsourcing-report": {
+    audience: "公司领导班子、采购评审及业务管理部门",
+    style: "aviation-blue",
+    brief: "请严格基于上传资料形成航站楼岗位外包专项汇报。先给出外包范围、核心测算结论和需审议事项，再按岗位分布与开放时段、人员配置、现场点位或图纸证据、人工成本对比、外包费用测算、市场调研、风险控制、可行性判断、意向单位和下一步安排展开。岗位数量、班次、金额和时间必须保持资料原始口径；适合的点位图、现场照片、表格和成本数据应分别使用图片证据页、原生表格或可编辑图表。",
+  },
+  "annual-work-plan": {
+    audience: "部门管理层、业务骨干与协同单位",
+    style: "aqua-planning",
+    brief: "请形成年度工作规划汇报。用一页概括年度主线和关键目标，再按安全防控、队伍建设、管理优化、服务品牌等工作域组织章节；每项举措说明目标、关键动作、责任协同和衡量方式，随后形成季度里程碑、资源与风险、预期安全/服务/运营/队伍成果。内容以计划和可验证交付为主，避免把口号拆成重复卡片；10页以上应包含目录与章节分隔页。",
+  },
+  "security-annual-review": {
+    audience: "公司领导班子、安委会与相关责任部门",
+    style: "security-report",
+    brief: "请形成安检护卫年度总结。先呈现业务数据和年度判断，再按政治引领、安全治理、双重预防、专项保障、质控体系、应急能力、三基训练、服务品牌等主题复盘工作举措与证据；随后归纳成效、存在问题、原因和下一年度计划。照片应作为活动或现场证据并配简短说明，数字优先使用KPI、柱状图或表格；不得把参考稿中的示例数字直接迁移到新项目。",
+  },
   "state-special-report": {
     audience: "公司领导班子与相关职能部门",
     style: "state-briefing",

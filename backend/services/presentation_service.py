@@ -43,6 +43,11 @@ PPT_MASTER_SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "ppt-maste
 STYLE_PRESETS: dict[str, dict[str, Any]] = {
     # Calm blue/white briefing palette for state-owned enterprise reporting.
     "state-briefing": {"bg": "FFFFFF", "fg": "263238", "muted": "5B6472", "accent": "00479D", "accent2": "5B9BD5", "decor": "state"},
+    # Reference-derived formal families. They share restrained enterprise
+    # typography, but use different page rhythm and control vocabularies.
+    "aviation-blue": {"bg": "FFFFFF", "fg": "17324A", "muted": "607487", "accent": "005BAC", "accent2": "4FA3D1", "decor": "aviation"},
+    "aqua-planning": {"bg": "F3FBFC", "fg": "173A3E", "muted": "5A7377", "accent": "32B8C7", "accent2": "80D6DD", "decor": "aqua"},
+    "security-report": {"bg": "FFFFFF", "fg": "1D2F46", "muted": "5F6F82", "accent": "07569F", "accent2": "4874CB", "decor": "security"},
     "dark-tech": {"bg": "0B1020", "fg": "F8FAFC", "muted": "A8B4CC", "accent": "5B7CFF", "accent2": "2DD4BF", "decor": "tech"},
     "swiss-minimal": {"bg": "F8F8F5", "fg": "141414", "muted": "5F625F", "accent": "E5484D", "accent2": "1C6BFF", "decor": "swiss"},
     "glassmorphism": {"bg": "11182A", "fg": "F7FAFF", "muted": "B8C2D9", "accent": "7C8CFF", "accent2": "59E1C2", "decor": "glass"},
@@ -58,6 +63,9 @@ STYLE_PRESETS: dict[str, dict[str, Any]] = {
 
 STYLE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "state-briefing": ("国企", "政府", "政务", "稳重", "沉稳", "汇报", "蓝白", "机场", "state-owned", "briefing"),
+    "aviation-blue": ("机场蓝白", "航空蓝白", "航站楼专项", "机场专项", "aviation briefing", "airport blue"),
+    "aqua-planning": ("浅青规划", "年度规划", "年度工作计划", "未来规划", "aqua planning", "annual planning"),
+    "security-report": ("安护深蓝", "安保总结", "安全年度总结", "安检护卫", "security annual report", "security report"),
     "dark-tech": ("科技", "未来", "人工智能", "ai", "赛博", "暗色", "深色", "科技感", "tech", "cyber", "futuristic"),
     "swiss-minimal": ("极简", "留白", "网格", "瑞士", "minimal", "swiss", "minimalist"),
     "glassmorphism": ("玻璃", "毛玻璃", "半透明", "glassmorphism", "glass"),
@@ -159,6 +167,8 @@ def _style_from_text(text: str) -> str | None:
     style_markers = ("风格", "视觉", "样式", "设计", "配色", "主题", "采用", "style", "visual", "design", "theme")
     explicit_phrases = {
         "国企蓝白": "state-briefing", "政务蓝白": "state-briefing", "暗夜科技": "dark-tech",
+        "机场蓝白": "aviation-blue", "航空蓝白": "aviation-blue", "浅青规划": "aqua-planning",
+        "年度规划风格": "aqua-planning", "安护深蓝": "security-report", "安保总结风格": "security-report",
         "瑞士极简": "swiss-minimal", "玻璃拟态": "glassmorphism", "数据新闻": "data-journalism",
         "杂志社论": "editorial", "工程蓝图": "blueprint", "墨迹笔记": "ink-notes",
         "摄影社论": "photo-editorial", "柔和圆角": "soft-rounded", "鲜明发布": "vivid-launch",
@@ -168,7 +178,7 @@ def _style_from_text(text: str) -> str | None:
             return style_id
     generic_keywords = {
         "ai", "data", "tech", "cyber", "futuristic", "photo", "launch", "glass", "minimal", "swiss", "blueprint", "ink", "sketch", "magazine", "saas", "vivid",
-        "国企", "政府", "政务", "稳重", "沉稳", "汇报", "机场", "科技", "未来", "人工智能", "暗色", "深色", "极简", "留白", "网格", "玻璃", "工程", "架构图", "手绘", "摄影", "照片", "发布", "发布会", "圆润", "柔和",
+        "国企", "政府", "政务", "稳重", "沉稳", "汇报", "机场", "年度", "规划", "安保", "安检", "护卫", "总结", "科技", "未来", "人工智能", "暗色", "深色", "极简", "留白", "网格", "玻璃", "工程", "架构图", "手绘", "摄影", "照片", "发布", "发布会", "圆润", "柔和",
     }
     has_style_marker = any(marker in haystack for marker in style_markers)
     for style_id, keywords in STYLE_KEYWORDS.items():
@@ -187,6 +197,13 @@ def _choose_intelligent_style(text: str, *, has_images: bool, has_template: bool
     explicit = _style_from_text(text)
     if explicit:
         return explicit
+    compact = re.sub(r"\s+", "", text.casefold())
+    if any(token in compact for token in ("安检护卫", "安保年度总结", "安全年度总结", "安护总结")):
+        return "security-report"
+    if any(token in compact for token in ("年度工作计划", "年度规划", "明年规划", "工作展望", "年度部署")):
+        return "aqua-planning"
+    if any(token in compact for token in ("航站楼外包", "机场专项汇报", "机场岗位", "航站楼岗位")):
+        return "aviation-blue"
     # Random is intentionally conservative for management reporting. Images
     # become evidence panels inside a calm briefing palette rather than a
     # reason to switch the whole deck to an editorial/photo treatment.
@@ -2891,6 +2908,46 @@ def _slide_palette(palette: dict[str, Any], *, kind: str, index: int, layout: st
         elif kind == "closing":
             bg, accent, accent2 = "F4F8FC", "0B5A9A", "7AA8C5"
         result.update({"bg": bg, "accent": accent, "accent2": accent2})
+    elif decor == "aviation":
+        variants = (
+            ("FFFFFF", "005BAC", "4FA3D1"),
+            ("F6F9FC", "07569F", "70AED2"),
+            ("FBFDFE", "164F7A", "82B9D5"),
+        )
+        bg, accent, accent2 = variants[(max(index, 1) - 1) % len(variants)]
+        if kind in {"section", "chapter", "section-divider"}:
+            bg, accent, accent2 = "0A477F", "07569F", "88C2E5"
+        elif kind in {"metric", "chart", "table"}:
+            bg = "EEF6FC"
+        elif kind in {"comparison", "cards", "timeline"}:
+            bg = "F5F9FC"
+        result.update({"bg": bg, "accent": accent, "accent2": accent2})
+    elif decor == "aqua":
+        variants = (
+            ("F3FBFC", "32B8C7", "80D6DD"),
+            ("EAF8F9", "239EAC", "64C8D2"),
+            ("F8FDFD", "2AA8B5", "97DDE2"),
+        )
+        bg, accent, accent2 = variants[(max(index, 1) - 1) % len(variants)]
+        if kind in {"section", "chapter", "section-divider"}:
+            bg, accent, accent2 = "DFF5F7", "24A8B7", "8AD7DE"
+        elif kind in {"metric", "chart", "table"}:
+            bg = "E8F7F8"
+        result.update({"bg": bg, "accent": accent, "accent2": accent2})
+    elif decor == "security":
+        variants = (
+            ("FFFFFF", "07569F", "4874CB"),
+            ("F5F8FC", "0B4C8A", "6A8FD5"),
+            ("FAFCFE", "124F84", "7596D6"),
+        )
+        bg, accent, accent2 = variants[(max(index, 1) - 1) % len(variants)]
+        if kind in {"section", "chapter", "section-divider"}:
+            bg, accent, accent2 = "0A477F", "07569F", "6F98D8"
+        elif kind in {"metric", "chart", "table"}:
+            bg = "EEF3FB"
+        elif kind in {"comparison", "cards", "timeline"}:
+            bg = "F6F8FC"
+        result.update({"bg": bg, "accent": accent, "accent2": accent2})
     elif decor == "tech":
         if kind in {"chart", "table", "metric"}:
             result["bg"] = "101A30"
@@ -2951,6 +3008,45 @@ def _add_decor(canvas: Canvas, slide: Any, palette: dict[str, Any], *, index: in
 
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 6.78, 11.7, 0.012, palette["accent2"], transparency=15)
         _add_text(canvas, slide, "汇报材料 / INTERNAL BRIEFING", 0.82, 6.9, 4.2, 0.2, size=8, color=palette["muted"], font=_font_for(palette, "Aptos Mono"))
+    elif decor == "aviation":
+        if kind in {"section", "chapter", "section-divider"}:
+            return
+        if kind in {"cover", "closing"}:
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 0.7, 0.08, 5.8, palette["accent"])
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 0.7, 1.42, 0.035, palette["accent2"])
+        else:
+            marker_shape = MSO_SHAPE.RECTANGLE if kind in {"chart", "table"} else MSO_SHAPE.OVAL
+            _shape(canvas, slide, marker_shape, 0.84, 0.18, 0.58, 0.58, palette["accent"], line="FFFFFF")
+            _add_text(canvas, slide, f"{index:02d}", 0.84, 0.29, 0.58, 0.24, size=13, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 1.56, 0.45, 1.32, 0.035, palette["accent"])
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 2.94, 0.45, 0.45, 0.035, palette["accent2"])
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 6.82, 11.7, 0.012, palette["accent2"], transparency=12)
+        _add_text(canvas, slide, "专项汇报 / AVIATION BRIEF", 0.82, 6.94, 4.0, 0.18, size=8, color=palette["muted"], font=_font_for(palette, "Aptos Mono"))
+    elif decor == "aqua":
+        if kind in {"section", "chapter", "section-divider"}:
+            return
+        # These quiet bars echo the planning reference without imposing the
+        # same panel composition on every page role.
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 10.45, 0, 2.4, 0.36, palette["accent2"], transparency=55)
+        if kind not in {"cover", "closing"}:
+            _shape(canvas, slide, MSO_SHAPE.ROUNDED_RECTANGLE, 11.55, 0.34, 0.72, 0.46, palette["accent"])
+            _add_text(canvas, slide, f"{index:02d}", 11.55, 0.43, 0.72, 0.22, size=12, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 0.48, 0.92, 0.045, palette["accent"])
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 1.8, 0.48, 0.34, 0.045, palette["accent2"])
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 6.82, 1.65, 0.48, palette["accent2"], transparency=68)
+        _add_text(canvas, slide, "年度规划 / ANNUAL PLAN", 9.18, 6.94, 3.1, 0.18, size=8, color=palette["muted"], align=PP_ALIGN.RIGHT, font=_font_for(palette, "Aptos Mono"))
+    elif decor == "security":
+        if kind in {"section", "chapter", "section-divider"}:
+            return
+        if kind not in {"cover", "closing"}:
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, 0.22, "DDE7F5")
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.82, 0.54, 0.62, 0.06, palette["accent"])
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 1.52, 0.54, 0.26, 0.06, palette["accent2"])
+            if kind in {"metric", "chart", "table"}:
+                _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 10.82, 0.38, 1.32, 0.36, palette["accent2"])
+                _add_text(canvas, slide, "数据要点", 10.82, 0.45, 1.32, 0.18, size=9, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 7.24, CANVAS_W, 0.26, "D9E5F3")
+        _add_text(canvas, slide, f"安护工作汇报  {index:02d}", 10.06, 7.27, 2.2, 0.14, size=7, color=palette["muted"], align=PP_ALIGN.RIGHT, font=_font_for(palette, "Aptos Mono"))
     elif decor == "tech":
         for x in (0.35, 0.64, 0.93): _shape(canvas, slide, MSO_SHAPE.RECTANGLE, x, 0.35, 0.17, 0.012, palette["accent2"], transparency=10)
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 10.95, 0.42, 1.6, 0.012, palette["accent"], transparency=25)
@@ -2978,7 +3074,7 @@ def _add_decor(canvas: Canvas, slide: Any, palette: dict[str, Any], *, index: in
     elif decor == "vivid":
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 10.75, 0, 2.55, 0.2, palette["accent"])
         _shape(canvas, slide, MSO_SHAPE.DIAMOND, 11.65, 5.45, 0.75, 0.75, palette["accent2"], transparency=2)
-    if decor not in {"swiss", "editorial", "data", "state"}:
+    if decor not in {"swiss", "editorial", "data", "state", "aviation", "aqua", "security"}:
         _add_text(canvas, slide, f"{index:02d} / BRIEF", 10.65, 6.93, 1.85, 0.2, size=8, color=palette["muted"], align=PP_ALIGN.RIGHT, font=_font_for(palette, "Aptos Mono"))
 
 
@@ -3013,6 +3109,30 @@ def _add_page_header(
         if summary:
             _add_text(canvas, slide, summary, 0.88, 1.12, 11.2, 0.42, size=13, color=palette["muted"], font=_font_for(palette, "Aptos"))
         return
+    if palette.get("decor") == "aviation":
+        if kicker:
+            _add_text(canvas, slide, kicker.upper(), 1.58, 0.18, 3.7, 0.2, size=9, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "未命名页面"), 1.58, 0.72, 10.35, 0.55, size=25, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        summary = str(spec.get("summary") or "")
+        if summary:
+            _add_text(canvas, slide, summary, 1.6, 1.38, 10.15, 0.44, size=13, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        return
+    if palette.get("decor") == "aqua":
+        if kicker:
+            _add_text(canvas, slide, kicker.upper(), 0.82, 0.62, 4.1, 0.22, size=9, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "未命名页面"), 0.82, 0.9, 10.45, 0.58, size=26, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        summary = str(spec.get("summary") or "")
+        if summary:
+            _add_text(canvas, slide, summary, 0.84, 1.57, 10.65, 0.44, size=13, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        return
+    if palette.get("decor") == "security":
+        if kicker:
+            _add_text(canvas, slide, kicker.upper(), 0.82, 0.38, 4.1, 0.2, size=9, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "未命名页面"), 0.82, 0.74, 10.8, 0.58, size=25, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        summary = str(spec.get("summary") or "")
+        if summary:
+            _add_text(canvas, slide, summary, 0.84, 1.4, 10.75, 0.44, size=13, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        return
     if kicker:
         _add_text(canvas, slide, kicker.upper(), 0.82, 0.56, 4.7, 0.28, size=10, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
     _add_text(canvas, slide, str(spec.get("title") or "未命名页面"), 0.82, 0.9, 10.7, 0.72, size=28, color=palette["fg"], bold=True, font="Georgia" if serif else _font_for(palette, "Aptos"))
@@ -3027,6 +3147,52 @@ def _add_takeaway(canvas: Canvas, slide: Any, text: str, palette: dict[str, Any]
 
 
 def _add_cover(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[str, Any], job: PresentationJob, cover_image: Path | None) -> None:
+    decor = str(palette.get("decor") or "")
+    if decor == "aviation":
+        if cover_image and cover_image.exists() and job.include_images:
+            try:
+                _add_picture_cover(canvas, slide, cover_image, 7.15, 0, 6.18, CANVAS_H)
+                _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 6.55, 0, 1.35, CANVAS_H, palette["accent"], transparency=4)
+            except Exception:
+                logger.warning("Unable to embed aviation cover image", exc_info=True)
+        else:
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 7.35, 0.72, 4.85, 5.8, "E7F2F9")
+            _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 6.72, 0.72, 1.35, 5.8, palette["accent"], transparency=3)
+        _add_text(canvas, slide, str(spec.get("kicker") or "专项工作汇报"), 1.04, 1.04, 4.8, 0.3, size=12, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or job.title), 1.0, 1.72, 5.85, 1.55, size=38, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or f"{job.audience or '管理层'} · {job.purpose or '对齐判断与行动'}"), 1.04, 3.62, 5.45, 0.72, size=17, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 1.04, 5.54, 1.35, 0.05, palette["accent"])
+        _add_text(canvas, slide, "AVIATION BRIEFING", 1.04, 5.72, 3.4, 0.24, size=10, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        return
+    if decor == "aqua":
+        if cover_image and cover_image.exists() and job.include_images:
+            try:
+                _add_picture_cover(canvas, slide, cover_image, 0, 0, CANVAS_W, CANVAS_H)
+                _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "E9F9FA", transparency=18)
+            except Exception:
+                logger.warning("Unable to embed aqua cover image", exc_info=True)
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 8.35, 0, 4.0, 0.65, palette["accent2"], transparency=48)
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 6.76, 3.1, 0.55, palette["accent2"], transparency=55)
+        _add_text(canvas, slide, str(spec.get("title") or job.title), 0.92, 1.62, 7.0, 1.72, size=40, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or f"{job.audience or '团队与决策者'} · {job.purpose or '明确年度方向'}"), 0.98, 3.72, 6.35, 0.68, size=18, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        _shape(canvas, slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.98, 5.28, 2.25, 0.48, palette["accent"])
+        _add_text(canvas, slide, str(spec.get("kicker") or "ANNUAL PLAN"), 0.98, 5.39, 2.25, 0.2, size=10, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+        return
+    if decor == "security":
+        if cover_image and cover_image.exists() and job.include_images:
+            try:
+                _add_picture_cover(canvas, slide, cover_image, 0, 0, CANVAS_W, CANVAS_H)
+                _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "0A477F", transparency=42)
+            except Exception:
+                logger.warning("Unable to embed security cover image", exc_info=True)
+        else:
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "EAF1F8")
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 0, 5.15, CANVAS_H, "FFFFFF", transparency=2)
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 4.82, 0, 1.42, CANVAS_H, palette["accent"], transparency=0)
+        _add_text(canvas, slide, str(spec.get("title") or job.title), 0.92, 1.62, 3.72, 1.65, size=34, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or f"{job.audience or '管理层'} · {job.purpose or '总结成效与问题'}"), 0.96, 3.68, 3.62, 0.72, size=16, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("kicker") or "年度总结"), 0.96, 5.24, 2.7, 0.3, size=11, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        return
     if cover_image and cover_image.exists() and job.include_images:
         try:
             _add_picture_cover(canvas, slide, cover_image, 7.72, 0.72, 4.65, 5.75)
@@ -3563,7 +3729,7 @@ def _add_cards(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[s
         fill = palette["accent"] if index == 0 else palette["bg"]
         line = palette["accent"] if index == 0 else palette["accent2"]
         text_color = "FFFFFF" if index == 0 else palette["fg"]
-        if palette.get("decor") == "state":
+        if palette.get("decor") in {"state", "aviation", "aqua", "security"}:
             # Alternate a highlighted first block with quiet paper-like blocks
             # so a formal card page has hierarchy without looking like a SaaS
             # dashboard.
@@ -3618,7 +3784,65 @@ def _add_table(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[s
     _add_takeaway(canvas, slide, str(spec.get("summary") or "表格保留原始口径，便于会后继续核对和编辑。"), palette, show=show_takeaway)
 
 
+def _add_agenda(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[str, Any]) -> None:
+    """Render a restrained directory page using the selected report family."""
+    items = [str(item) for item in (spec.get("bullets") or []) if str(item).strip()][:6]
+    if not items:
+        items = ["总体情况", "重点工作", "问题与风险", "下一步安排"]
+    decor = str(palette.get("decor") or "")
+    if decor == "aqua":
+        count = min(4, len(items))
+        width = 10.95 / max(count, 1)
+        for item_index, item in enumerate(items[:count]):
+            left = 0.9 + item_index * width
+            _add_text(canvas, slide, f"{item_index + 1:02d}", left, 2.55, width - 0.2, 0.5, size=22, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+            _shape(canvas, slide, MSO_SHAPE.RECTANGLE, left, 3.16, width - 0.32, 0.055, palette["accent2"])
+            _add_text(canvas, slide, item, left, 3.5, width - 0.38, 1.05, size=17, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+        return
+    if decor == "security":
+        for item_index, item in enumerate(items[:5]):
+            top = 2.22 + item_index * 0.68
+            _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 2.0, top, 8.6, 0.48, palette["accent"] if item_index == 0 else "E7EEF8", line=palette["accent2"])
+            number_color = "FFFFFF" if item_index == 0 else palette["accent"]
+            text_color = "FFFFFF" if item_index == 0 else palette["fg"]
+            _add_text(canvas, slide, f"{item_index + 1:02d}", 2.24, top + 0.1, 0.72, 0.22, size=11, color=number_color, bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+            _add_text(canvas, slide, item, 3.15, top + 0.08, 6.7, 0.26, size=14, color=text_color, bold=True, font=_font_for(palette, "Aptos"))
+        return
+    for item_index, item in enumerate(items[:5]):
+        top = 2.22 + item_index * 0.68
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 1.2, top, 0.74, 0.48, palette["accent"])
+        _add_text(canvas, slide, f"{item_index + 1:02d}", 1.2, top + 0.1, 0.74, 0.22, size=11, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 2.04, top, 8.7, 0.48, "FFFFFF", line=palette["accent2"])
+        _add_text(canvas, slide, item, 2.34, top + 0.08, 7.95, 0.26, size=14, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
+
+
 def _add_section_divider(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[str, Any]) -> None:
+    decor = str(palette.get("decor") or "")
+    if decor == "aqua":
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "DFF5F7")
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 10.1, 0, 2.8, 0.5, palette["accent2"], transparency=50)
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 6.72, 2.3, 0.56, palette["accent2"], transparency=58)
+        _shape(canvas, slide, MSO_SHAPE.ROUNDED_RECTANGLE, 5.83, 1.65, 1.15, 0.7, palette["accent"])
+        _add_text(canvas, slide, str(spec.get("kicker") or "01"), 5.83, 1.79, 1.15, 0.32, size=20, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "下一部分"), 1.2, 2.78, 10.9, 0.95, size=39, color=palette["fg"], bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("summary") or spec.get("subtitle") or ""), 2.2, 4.02, 8.9, 0.58, size=17, color=palette["muted"], align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        return
+    if decor == "security":
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "0A477F")
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 0, 4.55, CANVAS_H, "FFFFFF", transparency=4)
+        _add_text(canvas, slide, str(spec.get("kicker") or "01"), 1.0, 1.02, 2.7, 1.05, size=52, color=palette["accent"], bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.55, 2.45, 7.05, 1.08, palette["accent"])
+        _add_text(canvas, slide, str(spec.get("title") or "下一部分"), 0.82, 2.68, 6.48, 0.56, size=28, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("summary") or spec.get("subtitle") or ""), 7.95, 2.7, 4.1, 1.0, size=17, color="E5EEF8", bold=True, font=_font_for(palette, "Aptos"))
+        return
+    if decor == "aviation":
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "0A477F")
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 2.35, CANVAS_W, 2.02, "062F57", transparency=28)
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.86, 1.14, 0.1, 4.65, palette["accent2"])
+        _add_text(canvas, slide, str(spec.get("kicker") or "PART 01"), 1.34, 1.38, 3.1, 0.3, size=12, color="CBE7F7", bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "下一部分"), 1.28, 2.68, 10.2, 0.92, size=39, color="FFFFFF", bold=True, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("summary") or spec.get("subtitle") or ""), 1.32, 4.02, 8.9, 0.58, size=18, color="D7E8F5", font=_font_for(palette, "Aptos"))
+        return
     _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, palette["accent"])
     _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.86, 1.05, 0.12, 4.55, palette["accent2"])
     _add_text(canvas, slide, str(spec.get("kicker") or "SECTION"), 1.28, 1.2, 3.2, 0.3, size=12, color="D7E8FB", bold=True, font=_font_for(palette, "Aptos Mono"))
@@ -3656,7 +3880,8 @@ def _add_content_stack(canvas: Canvas, slide: Any, spec: dict[str, Any], palette
     row_height = min(0.72, 2.72 / max(len(bullets), 1))
     for item_index, item in enumerate(bullets):
         top = 3.08 + item_index * (row_height + 0.1)
-        fill = "FFFFFF" if item_index % 2 == 0 else "F2F7FB"
+        secondary_fill = "EAF7F8" if palette.get("decor") == "aqua" else "F2F5FA" if palette.get("decor") == "security" else "F2F7FB"
+        fill = "FFFFFF" if item_index % 2 == 0 else secondary_fill
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.9, top, 11.15, row_height, fill, line="D7E5F0")
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0.9, top, 0.08, row_height, palette["accent"] if item_index == 0 else palette["accent2"])
         _add_text(canvas, slide, f"{item_index + 1:02d}", 1.16, top + 0.12, 0.58, 0.28, size=11, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
@@ -3700,7 +3925,7 @@ def _add_split(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[s
     values = [spec.get("left_title") or "现状", spec.get("right_title") or "目标"]
     bullets = [spec.get("left_bullets") or spec.get("bullets") or [], spec.get("right_bullets") or ["形成统一判断", "明确下一步动作"]]
     for left, color, heading, items in zip((item[0] for item in columns), (item[1] for item in columns), values, bullets):
-        if palette.get("decor") == "state":
+        if palette.get("decor") in {"state", "aviation", "aqua", "security"}:
             # Formal comparison pages read better as two flat briefing panels;
             # reserve rounded cards for lighter product/editorial themes.
             panel_fill = "FFFFFF" if color == palette["accent"] else "EAF3FA"
@@ -3738,6 +3963,26 @@ def _add_quote(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[s
 
 
 def _add_closing(canvas: Canvas, slide: Any, spec: dict[str, Any], palette: dict[str, Any]) -> None:
+    decor = str(palette.get("decor") or "")
+    if decor == "aviation":
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 8.7, 0, 4.62, CANVAS_H, palette["accent"], transparency=2)
+        _add_text(canvas, slide, str(spec.get("kicker") or "CLOSING"), 1.02, 1.28, 2.8, 0.3, size=11, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "谢谢"), 1.0, 2.05, 6.7, 1.2, size=43, color=palette["accent"], bold=True, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or spec.get("summary") or "请审议并指导"), 1.04, 3.72, 6.25, 0.72, size=19, color=palette["muted"], font=_font_for(palette, "Aptos"))
+        return
+    if decor == "aqua":
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 9.1, 0, 3.3, 0.52, palette["accent2"], transparency=48)
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 6.8, 2.5, 0.52, palette["accent2"], transparency=58)
+        _add_text(canvas, slide, str(spec.get("kicker") or "THE END"), 5.1, 2.18, 3.1, 0.3, size=11, color=palette["accent"], bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos Mono"))
+        _add_text(canvas, slide, str(spec.get("title") or "谢谢"), 3.1, 2.78, 7.1, 1.0, size=41, color=palette["fg"], bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or spec.get("summary") or "同心同行，落实到下一步"), 3.0, 4.02, 7.3, 0.58, size=17, color=palette["muted"], align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        return
+    if decor == "security":
+        _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, CANVAS_W, CANVAS_H, "0A477F")
+        _shape(canvas, slide, MSO_SHAPE.PARALLELOGRAM, 0, 0, 3.7, CANVAS_H, "FFFFFF", transparency=4)
+        _add_text(canvas, slide, str(spec.get("title") or "谢谢聆听"), 4.0, 2.65, 8.1, 1.0, size=40, color="FFFFFF", bold=True, align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        _add_text(canvas, slide, str(spec.get("subtitle") or spec.get("summary") or "请批评指正"), 4.35, 3.9, 7.45, 0.58, size=17, color="DCE8F5", align=PP_ALIGN.CENTER, font=_font_for(palette, "Aptos"))
+        return
     _add_text(canvas, slide, str(spec.get("kicker") or "NEXT MOVE"), 0.82, 1.0, 3.0, 0.34, size=12, color=palette["accent2"], bold=True, font=_font_for(palette, "Aptos Mono"))
     _add_text(canvas, slide, str(spec.get("title") or "从今天开始推进"), 0.8, 1.65, 10.1, 1.25, size=38, color=palette["fg"], bold=True, font=_font_for(palette, "Aptos"))
     _add_text(canvas, slide, str(spec.get("subtitle") or spec.get("summary") or "把讨论转成下一次可见的交付"), 0.85, 3.3, 8.9, 0.75, size=21, color=palette["muted"], font=_font_for(palette, "Aptos"))
@@ -3768,7 +4013,7 @@ def _add_slide(
     elif palette.get("_template_bg"):
         bg = slide.background.fill; bg.solid(); bg.fore_color.rgb = _rgb(str(palette["_template_bg"]))
     if "visual_decor" in features: _add_decor(canvas, slide, palette, index=index, kind=raw_kind, layout=raw_layout)
-    if palette.get("decor") != "state":
+    if palette.get("decor") not in {"state", "aviation", "aqua", "security"}:
         _shape(canvas, slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.12, CANVAS_H, palette["accent"])
     render_spec = dict(spec)
     if "kicker_summary" not in features:
@@ -3793,7 +4038,8 @@ def _add_slide(
         _add_closing(canvas, slide, render_spec, palette)
     else:
         _add_page_header(canvas, slide, render_spec, palette, index, serif=palette.get("decor") in {"editorial", "data", "ink"}, kind=kind, layout=layout)
-        if layout in {"metric", "metrics"} or kind == "metric": _add_metric(canvas, slide, render_spec, palette, show_takeaway=show_takeaway)
+        if layout in {"agenda", "toc", "contents"} or kind in {"agenda", "toc"}: _add_agenda(canvas, slide, render_spec, palette)
+        elif layout in {"metric", "metrics"} or kind == "metric": _add_metric(canvas, slide, render_spec, palette, show_takeaway=show_takeaway)
         elif layout in {"chart", "bar-chart", "line-chart", "donut-chart"} or kind == "chart": _add_chart(canvas, slide, render_spec, palette, show_takeaway=show_takeaway)
         elif layout in {"table", "data-table"} or kind == "table": _add_table(canvas, slide, render_spec, palette, show_takeaway=show_takeaway)
         elif layout in {"image", "photo-split", "image-split"} or kind in {"image", "photo"}: _add_image_split(canvas, slide, render_spec, palette, cover_image, show_takeaway=show_takeaway)
@@ -3911,7 +4157,7 @@ def generate_presentation(job_id: int) -> None:
         prompt = (
             "你是资深国企汇报设计师、信息架构师和数据编辑。只返回 JSON，不要 Markdown。先在内部完成资料事实提取、去重、总结、风险核验和页面分配，再输出结构。结构必须是 "
             '{"title":"...","slides":[{"kind":"cover|agenda|section|statement|content|cards|metric|timeline|comparison|quote|chart|table|image|closing",'
-            '"layout_id":"cover|section-divider|statement|content|content-stack|content-rail|content-emphasis|cards|metric|timeline|comparison|chart|bar-chart|line-chart|donut-chart|table|photo-split|closing",'
+            '"layout_id":"cover|agenda|section-divider|statement|content|content-stack|content-rail|content-emphasis|cards|metric|timeline|comparison|chart|bar-chart|line-chart|donut-chart|table|photo-split|closing",'
             '"visual_intent":"hero|evidence|comparison|process|metrics|photo|table|chapter|closing","density":"low|medium|high",'
             '"template_slide":null,"kicker":"...","title":"...","subtitle":"...","summary":"一句页面结论",'
             '"body":"...","bullets":["..."],"metric":"...","metric_label":"...",'
@@ -3926,8 +4172,9 @@ def generate_presentation(job_id: int) -> None:
             f"视觉素材位：{'启用' if job.include_images else '关闭；不得输出 image/photo 页面，也不得嵌入参考图片'}。"
             "用户简报中的内容、结构和口径要求优先级最高。上传模板本身代表明确的视觉选择，除非用户明确要求忽略或不用模板，否则模板的背景、字体、主题色、母版结构和页面装饰必须沿用，不得另画一套统一背景。"
             "只使用参考资料中出现的事实和数字，不得补造数据；合并重复观点，避免整段复制原文。每页只表达一个主结论，标题写成判断句，并给出一句可直接汇报的 summary。先用事实蓝图校验口径，再写页面内容。"
-            "相邻页面必须轮换版式：封面、章节分隔、结论页、双栏/卡片、指标、时间轴、表格/图表、图片证据和收束页交替出现；普通正文也要在 content、content-stack、content-rail、content-emphasis 之间轮换；不要把所有页面都做成同样的背景、圆角卡片或右侧指标框。"
-            "若采用国企汇报方向，变化应来自深蓝章节页、白底正文页、浅蓝数据页、图片证据页和不同信息骨架，而不是霓虹、毛玻璃、大面积渐变或密集的拟态控件。超过12页时至少安排2个章节分隔页，且相邻普通正文页不得使用相同 layout_id。"
+            "相邻页面必须轮换版式：封面、目录、章节分隔、结论页、双栏/卡片、指标、时间轴、表格/图表、图片证据和收束页交替出现；普通正文也要在 content、content-stack、content-rail、content-emphasis 之间轮换；不要把所有页面都做成同样的背景、圆角卡片或右侧指标框。"
+            "若采用国企汇报方向，变化应来自深蓝章节页、白底正文页、浅色数据页、图片证据页和不同信息骨架，而不是霓虹、毛玻璃、大面积渐变或密集的拟态控件。编号章、章节条、证据标签、图片说明和KPI标记只在对应页面角色中使用，不得每页复制同一组控件。10页以上应在封面后安排 agenda 目录页；超过12页时至少安排2个章节分隔页，且相邻普通正文页不得使用相同 layout_id。"
+            "机场岗位外包类材料优先采用点位/图纸证据、人员与成本表、市场调研和可行性判断的页面节奏；年度规划类材料优先采用工作主线、重点举措、季度里程碑和成果目标；安护年度总结类材料优先采用业务数据、举措证据、能力建设、服务成效、问题与计划。"
             "只有在资料存在至少两组可比较数字时才输出 chart 或 table；chart.values 必须逐一来自资料，无法核验时宁可不用图表。图表类型按数据语义选择：时间序列用 line，构成占比用 donut，类别比较用 bar。"
             "visual_intent 描述页面真正的沟通任务，density 描述信息密度；不要为了凑版式把普通正文伪装成指标页。若上传了模板，只有在某页与内容的视觉骨架明显唯一匹配时才填写 template_slide，填写模板摘要中的纯整数页码（例如 24，不要写 P24）；其余页面填 null，由系统按版式能力和相邻去重选择。相邻页面尽量不要重复 template_slide 或 family。"
             "模板页面结构只作为可填充的原生页面库，输出时由系统克隆合适页面并替换槽位，不能改变模板的主色、字体、图片、Logo、表格和页眉页脚。"
@@ -3956,11 +4203,17 @@ def generate_presentation(job_id: int) -> None:
         normalised, structure_repairs = _ensure_report_structure(
             normalised,
             max(5, min(100, int(job.slide_count or 10))),
-            native_agenda=bool(use_native_template and template_library and any(
-                _native_layout_family(item) == "agenda"
-                for item in (template_library.get("slides") or [])
-                if isinstance(item, dict)
-            )),
+            native_agenda=bool(
+                not use_native_template
+                or (
+                    template_library
+                    and any(
+                        _native_layout_family(item) == "agenda"
+                        for item in (template_library.get("slides") or [])
+                        if isinstance(item, dict)
+                    )
+                )
+            ),
         )
         normalised = _enforce_layout_variety(normalised, features)
         if not job.include_images:

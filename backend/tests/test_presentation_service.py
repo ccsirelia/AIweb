@@ -13,6 +13,7 @@ from services.presentation_service import (
     _add_slide,
     _build_native_fill_plan,
     _chart_is_supported_by_source,
+    _choose_intelligent_style,
     _clip_multiline,
     _color_contrast,
     _contrasting_color,
@@ -75,12 +76,25 @@ class PresentationStylePrecedenceTests(unittest.TestCase):
     def test_explicit_visual_direction_is_detected(self) -> None:
         self.assertEqual(_style_from_text("请采用国企蓝白风格"), "state-briefing")
         self.assertEqual(_style_from_text("做成暗夜科技"), "dark-tech")
+        self.assertEqual(_style_from_text("请采用机场蓝白样式"), "aviation-blue")
+        self.assertEqual(_style_from_text("视觉使用浅青规划风格"), "aqua-planning")
+        self.assertEqual(_style_from_text("设计成安护深蓝"), "security-report")
+
+    def test_intelligent_style_uses_report_semantics(self) -> None:
+        self.assertEqual(_choose_intelligent_style("航站楼岗位外包项目", has_images=False, has_template=False), "aviation-blue")
+        self.assertEqual(_choose_intelligent_style("2027年度工作计划与部署", has_images=False, has_template=False), "aqua-planning")
+        self.assertEqual(_choose_intelligent_style("安检护卫年度总结", has_images=False, has_template=False), "security-report")
 
     def test_state_palette_changes_by_page_role(self) -> None:
         base = STYLE_PRESETS["state-briefing"]
         self.assertEqual(_slide_palette(base, kind="section", index=2)["bg"], "0B3D70")
         self.assertEqual(_slide_palette(base, kind="chart", index=3)["bg"], "EEF6FC")
         self.assertEqual(_slide_palette(base, kind="content", index=4)["bg"], "F3F7FB")
+
+    def test_reference_derived_palettes_change_by_page_role(self) -> None:
+        self.assertEqual(_slide_palette(STYLE_PRESETS["aviation-blue"], kind="section", index=2)["bg"], "0A477F")
+        self.assertEqual(_slide_palette(STYLE_PRESETS["aqua-planning"], kind="chart", index=3)["bg"], "E8F7F8")
+        self.assertEqual(_slide_palette(STYLE_PRESETS["security-report"], kind="chart", index=3)["bg"], "EEF3FB")
 
     def test_overlay_text_color_is_corrected_for_local_background(self) -> None:
         corrected = _contrasting_color("F8FAFC", "FFFFFF", minimum=4.5)
@@ -124,6 +138,49 @@ class PresentationStylePrecedenceTests(unittest.TestCase):
         self.assertEqual(backgrounds, ["FFFFFF", "0B3D70", "EEF6FC", "FAFCFE"])
         self.assertGreater(len(prs.slides[2].shapes), len(prs.slides[1].shapes))
         self.assertNotEqual(len(prs.slides[0].shapes), len(prs.slides[3].shapes))
+
+    def test_reference_derived_renderers_support_agenda_and_role_variants(self) -> None:
+        job = SimpleNamespace(
+            title="年度工作汇报",
+            audience="管理层",
+            purpose="复盘并部署",
+            include_images=False,
+            metadata_json="{}",
+        )
+        features = {"kicker_summary", "layout_variety", "visual_decor", "data_story"}
+        specs = [
+            {"kind": "cover", "layout_id": "cover", "title": "年度工作汇报"},
+            {"kind": "agenda", "layout_id": "agenda", "title": "汇报目录", "bullets": ["总体情况", "重点工作", "问题风险", "下一步"]},
+            {"kind": "section", "layout_id": "section-divider", "kicker": "01", "title": "重点工作"},
+            {"kind": "chart", "layout_id": "bar-chart", "title": "关键指标", "chart": {"type": "bar", "labels": ["甲", "乙"], "values": [12, 20]}},
+            {"kind": "closing", "layout_id": "closing", "title": "谢谢"},
+        ]
+        for style_id in ("aviation-blue", "aqua-planning", "security-report"):
+            with self.subTest(style=style_id):
+                prs = Presentation()
+                while prs.slides:
+                    slide_id = prs.slides._sldIdLst[0]
+                    prs.part.drop_rel(slide_id.rId)
+                    prs.slides._sldIdLst.remove(slide_id)
+                for index, spec in enumerate(specs, start=1):
+                    _add_slide(prs, spec, STYLE_PRESETS[style_id], job, index, None, features)
+                self.assertEqual(len(prs.slides), 5)
+                self.assertGreater(len(prs.slides[1].shapes), 8)
+                self.assertNotEqual(
+                    str(prs.slides[1].background.fill.fore_color.rgb),
+                    str(prs.slides[2].background.fill.fore_color.rgb),
+                )
+                chart_text = "\n".join(
+                    shape.text
+                    for shape in prs.slides[3].shapes
+                    if getattr(shape, "has_text_frame", False)
+                )
+                expected_control = {
+                    "aviation-blue": "专项汇报 / AVIATION BRIEF",
+                    "aqua-planning": "年度规划 / ANNUAL PLAN",
+                    "security-report": "数据要点",
+                }[style_id]
+                self.assertIn(expected_control, chart_text)
 
     def test_template_is_abandoned_only_by_explicit_instruction(self) -> None:
         self.assertFalse(_prompt_disables_native_template("请采用沉稳国企风格并参考上传模板"))
